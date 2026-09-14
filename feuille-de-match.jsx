@@ -238,7 +238,7 @@ function feuilleHTML(plateau, equipes, personneDe) {
       <div class="fm-bas">
         <div><b>SECTEUR DE :</b>${esc(plateau.secteur)}</div>
         <div><b>GROUPE :</b>${esc(plateau.groupe)}</div>
-        <div><b>LIEU :</b>${esc(plateau.lieu)}</div>
+        <div><b>PLATEAU à :</b>${esc(plateau.lieu)}</div>
         <div><b>DATE :</b>${esc(dateFr)}</div>
       </div>
       <div class="fm-pied">
@@ -396,6 +396,23 @@ function construirePDF(contenu) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Stockage : window.storage dans l'artifact, localStorage ailleurs    */
+/* ------------------------------------------------------------------ */
+const stockage = {
+  async lire(cle) {
+    if (typeof window !== "undefined" && window.storage) {
+      const r = await window.storage.get(cle);
+      return r?.value ?? null;
+    }
+    return window.localStorage.getItem(cle);
+  },
+  ecrire(cle, valeur) {
+    if (typeof window !== "undefined" && window.storage) return window.storage.set(cle, valeur);
+    window.localStorage.setItem(cle, valeur);
+  },
+};
+
+/* ------------------------------------------------------------------ */
 /*  Application                                                        */
 /* ------------------------------------------------------------------ */
 export default function App() {
@@ -411,17 +428,17 @@ export default function App() {
     (async () => {
       let aEffectif = false;
       try {
-        const r = await window.storage.get(CLE_EFFECTIF);
-        if (r?.value) {
-          const d = JSON.parse(r.value);
+        const v = await stockage.lire(CLE_EFFECTIF);
+        if (v) {
+          const d = JSON.parse(v);
           setEffectif(d);
           aEffectif = d.length > 0;
         }
       } catch (e) { /* première ouverture, ou stockage indisponible */ }
       try {
-        const r = await window.storage.get(CLE_PLATEAU);
-        if (r?.value) {
-          const d = JSON.parse(r.value);
+        const v = await stockage.lire(CLE_PLATEAU);
+        if (v) {
+          const d = JSON.parse(v);
           if (d.plateau) setPlateau(d.plateau);
           if (d.equipes?.length) {
             setEquipes(d.equipes);
@@ -435,7 +452,7 @@ export default function App() {
   }, []);
 
   const enregistre = (cle, valeur) => {
-    try { window.storage.set(cle, JSON.stringify(valeur)); } catch (e) { /* best effort */ }
+    try { stockage.ecrire(cle, JSON.stringify(valeur)); } catch (e) { /* best effort */ }
   };
 
   useEffect(() => { if (pret) enregistre(CLE_EFFECTIF, effectif); }, [effectif, pret]);
@@ -1250,4 +1267,14 @@ function VueFeuille({ plateau, equipes, personneDe }) {
       </div>
     </section>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Montage autonome (site statique). Sans élément #racine — dans      */
+/*  l'artifact par exemple — ce bloc ne fait rien.                     */
+/* ------------------------------------------------------------------ */
+if (typeof document !== "undefined" && document.getElementById("racine")) {
+  import("react-dom/client").then(({ createRoot }) => {
+    createRoot(document.getElementById("racine")).render(<App />);
+  });
 }
