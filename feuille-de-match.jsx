@@ -238,7 +238,7 @@ function feuilleHTML(plateau, equipes, personneDe) {
       <div class="fm-bas">
         <div><b>SECTEUR DE :</b>${esc(plateau.secteur)}</div>
         <div><b>GROUPE :</b>${esc(plateau.groupe)}</div>
-        <div><b>PLATEAU à :</b>${esc(plateau.lieu)}</div>
+        <div><b>LIEU :</b>${esc(plateau.lieu)}</div>
         <div><b>DATE :</b>${esc(dateFr)}</div>
       </div>
       <div class="fm-pied">
