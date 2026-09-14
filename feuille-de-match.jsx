@@ -29,6 +29,11 @@ const DELEGUE = "Délégué";
 
 const CLE_EFFECTIF = "feuilles:effectif";
 const CLE_PLATEAU = "feuilles:plateau";
+const CLE_CODE = "feuilles:code";
+const CLE_EMPREINTE = "feuilles:empreinte";
+
+/* Effectif chiffré publié à côté de l'application. */
+const URL_EFFECTIF = "./effectif.enc.json";
 
 const PLATEAU_VIDE = {
   categorie: "U8",   // U8 · U9 · Mixte
@@ -159,6 +164,131 @@ function depuisCSV(texte) {
   });
 
   return { personnes, ignorees };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Effectif publié                                                    */
+/*  Un fichier chiffré est servi à côté de l'application. Il contient   */
+/*  le CSV produit par l'export ci-dessus. Le code saisi une fois       */
+/*  ouvre le fichier, le résultat reste sur l'appareil.                 */
+/* ------------------------------------------------------------------ */
+const depuisB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function cleAES(phrase, sel, iterations) {
+  const matiere = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(phrase), "PBKDF2", false, ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: sel, iterations, hash: "SHA-256" },
+    matiere, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
+  );
+}
+
+async function telechargerPaquet(url = URL_EFFECTIF) {
+  let reponse;
+  try {
+    reponse = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" });
+  } catch (e) {
+    throw new Error("FICHIER_INDISPONIBLE");
+  }
+  if (!reponse.ok) throw new Error("FICHIER_INDISPONIBLE");
+  const paquet = await reponse.json().catch(() => null);
+  if (!paquet || paquet.v !== 1) throw new Error("FORMAT_INCONNU");
+  return paquet;
+}
+
+/* Rend le CSV en clair. AES-GCM refuse de déchiffrer si le code est faux :
+   pas de données approximatives, une erreur franche. */
+async function dechiffrerPaquet(paquet, phrase) {
+  if (typeof crypto === "undefined" || !crypto.subtle) throw new Error("CONTEXTE_NON_SUR");
+  const cle = await cleAES(phrase, depuisB64(paquet.kdf.sel), paquet.kdf.iterations);
+  let clair;
+  try {
+    clair = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: depuisB64(paquet.iv) }, cle, depuisB64(paquet.donnees)
+    );
+  } catch (e) {
+    throw new Error("CODE_INCORRECT");
+  }
+  return new TextDecoder().decode(clair);
+}
+
+/* Découpe « DI GREGORIO Jules » en nom de famille et prénom : les mots en
+   capitales du début appartiennent au nom. */
+function coupeNom(entier) {
+  const mots = entier.split(" ").filter(Boolean);
+  if (!mots.length) return null;
+  let i = 0;
+  while (
+    i < mots.length - 1 &&
+    mots[i] === mots[i].toUpperCase() &&
+    /[A-ZÀ-ÖØ-Þ]/.test(mots[i])
+  ) i++;
+  if (i === 0) i = 1;
+  return { nom: mots.slice(0, i).join(" "), prenom: mots.slice(i).join(" ") };
+}
+
+/* Un effectif collé depuis une conversation : soit le CSV complet, soit des
+   lignes libres du genre « AZEB Noah 9604860480 U8 21/05/2019 ». */
+function depuisColle(texte) {
+  const lignes = (texte || "").replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
+  if (!lignes.length) return { personnes: [], erreur: "Rien n'a été collé." };
+
+  const structurees = lignes.filter((l) => /[;,\t]/.test(l)).length;
+  if (structurees >= lignes.length - 1) return depuisCSV(texte);
+
+  const rangs = [];
+  const ignorees = [];
+  lignes.forEach((ligne, n) => {
+    const licence = ligne.match(/\b(\d{9,12})\b/);
+    if (!licence) { ignorees.push(n + 1); return; }
+    const naissance = ligne.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const categorie = ligne.match(/\bU\d{1,2}\b|d[ée]l[ée]gu[a-zé]*/i);
+
+    const reste = ligne
+      .replace(licence[0], " ")
+      .replace(naissance ? naissance[0] : "\u0000", " ")
+      .replace(categorie ? categorie[0] : "\u0000", " ")
+      .replace(/[;,\t|]+/g, " ")
+      .replace(/\s[-–—]+(?=\s|$)/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/^[\s\-–—.:]+|[\s\-–—.:]+$/g, "");
+
+    const coupe = coupeNom(reste);
+    if (!coupe) { ignorees.push(n + 1); return; }
+    rangs.push(
+      [coupe.nom, coupe.prenom, categorie ? categorie[0] : "U8",
+       licence[1], naissance ? naissance[1] : "", "oui"]
+        .map(echappe).join(";")
+    );
+  });
+
+  if (!rangs.length) {
+    return { personnes: [], erreur: "Aucune ligne ne comporte de numéro de licence." };
+  }
+  const { personnes } = depuisCSV([COLONNES.join(";"), ...rangs].join("\n"));
+  return { personnes, ignorees };
+}
+
+function bilan(ajoutes, majs, ignorees) {
+  const bouts = [];
+  if (ajoutes) bouts.push(`${ajoutes} ajouté${ajoutes > 1 ? "s" : ""}`);
+  if (majs) bouts.push(`${majs} mis à jour`);
+  if (ignorees) bouts.push(`${ignorees} ligne(s) ignorée(s)`);
+  return (bouts.length ? bouts.join(", ") : "Aucun changement") + ".";
+}
+
+/* Ce qui arrive écrase ce qui porte le même numéro de licence ; le reste de
+   l'effectif local est conservé, délégués ajoutés à la main compris. */
+function fusion(actuel, personnes) {
+  const parId = new Map(actuel.map((p) => [p.id, p]));
+  let ajoutes = 0;
+  let majs = 0;
+  personnes.forEach((p) => {
+    if (parId.has(p.id)) { parId.set(p.id, { ...parId.get(p.id), ...p }); majs++; }
+    else { parId.set(p.id, p); ajoutes++; }
+  });
+  return { liste: [...parId.values()], ajoutes, majs };
 }
 
 /* ------------------------------------------------------------------ */
@@ -655,17 +785,47 @@ export default function App() {
   const [equipeActive, setEquipeActive] = useState(null);
   const [onglet, setOnglet] = useState("effectif");
   const [pret, setPret] = useState(false);
+  const [etatEffectif, setEtatEffectif] = useState("chargement");
+  const [codeDemande, setCodeDemande] = useState(false);
 
-  /* Rien n'est embarqué dans le code : tout vient du navigateur. */
+  /* Rien n'est embarqué dans le code. L'effectif vient du fichier chiffré
+     publié à côté de l'application, et de ce qu'en a gardé le navigateur. */
+  const synchroniser = async (liste) => {
+    let code = null;
+    let empreinte = null;
+    try {
+      code = await stockage.lire(CLE_CODE);
+      empreinte = await stockage.lire(CLE_EMPREINTE);
+    } catch (e) { /* stockage indisponible */ }
+    if (!code) return liste.length ? "local" : "code_requis";
+
+    let paquet;
+    try {
+      paquet = await telechargerPaquet();
+    } catch (e) {
+      return liste.length ? "hors_ligne" : "indisponible";
+    }
+    if (liste.length && paquet.empreinte && paquet.empreinte === empreinte) return "a_jour";
+
+    try {
+      const { personnes } = depuisCSV(await dechiffrerPaquet(paquet, code));
+      if (!personnes.length) return "a_jour";
+      setEffectif((prev) => fusion(prev, personnes).liste);
+      try { stockage.ecrire(CLE_EMPREINTE, paquet.empreinte || ""); } catch (e) { /* best effort */ }
+      return liste.length ? "mis_a_jour" : "a_jour";
+    } catch (e) {
+      return "code_perime";
+    }
+  };
+
   useEffect(() => {
     (async () => {
-      let aEffectif = false;
+      let liste = [];
       try {
         const v = await stockage.lire(CLE_EFFECTIF);
         if (v) {
-          const d = JSON.parse(v);
-          setEffectif(d);
-          aEffectif = d.length > 0;
+          liste = JSON.parse(v) || [];
+          setEffectif(liste);
         }
       } catch (e) { /* première ouverture, ou stockage indisponible */ }
       try {
@@ -679,10 +839,52 @@ export default function App() {
           }
         }
       } catch (e) { /* pas de plateau en cours */ }
-      if (aEffectif) setOnglet("plateau");
+
+      /* Avec un effectif déjà là, on ouvre tout de suite et la vérification
+         se fait derrière. Sans effectif, rien à montrer avant la réponse. */
+      if (liste.length) {
+        setOnglet("plateau");
+        setPret(true);
+      }
+      setEtatEffectif(await synchroniser(liste));
+      if (liste.length === 0) setOnglet("plateau");
       setPret(true);
     })();
   }, []);
+
+  /* Saisie du code : télécharge, déchiffre, mémorise. */
+  const ouvrirAvecCode = async (code) => {
+    const paquet = await telechargerPaquet();
+    const { personnes } = depuisCSV(await dechiffrerPaquet(paquet, code));
+    if (!personnes.length) throw new Error("FICHIER_VIDE");
+    setEffectif((prev) => fusion(prev, personnes).liste);
+    try {
+      stockage.ecrire(CLE_CODE, code);
+      stockage.ecrire(CLE_EMPREINTE, paquet.empreinte || "");
+    } catch (e) { /* best effort */ }
+    setEtatEffectif("a_jour");
+    setCodeDemande(false);
+    setOnglet("plateau");
+  };
+
+  /* Repli : une liste collée depuis une conversation. */
+  const reprendreColle = (texte) => {
+    const { personnes, erreur } = depuisColle(texte);
+    if (erreur || !personnes.length) throw new Error(erreur || "Aucune ligne lisible dans ce texte.");
+    setEffectif((prev) => fusion(prev, personnes).liste);
+    setEtatEffectif("colle");
+    setCodeDemande(false);
+    setOnglet("plateau");
+  };
+
+  const oublierCode = () => {
+    try {
+      stockage.ecrire(CLE_CODE, "");
+      stockage.ecrire(CLE_EMPREINTE, "");
+    } catch (e) { /* best effort */ }
+    setEtatEffectif(effectif.length ? "local" : "code_requis");
+    setCodeDemande(true);
+  };
 
   const enregistre = (cle, valeur) => {
     try { stockage.ecrire(cle, JSON.stringify(valeur)); } catch (e) { /* best effort */ }
@@ -755,6 +957,22 @@ export default function App() {
     );
   }
 
+  const sansEffectif = effectif.length === 0;
+  const demandeCode =
+    codeDemande ||
+    (sansEffectif && ["code_requis", "code_perime", "indisponible"].includes(etatEffectif));
+
+  if (demandeCode) {
+    return (
+      <Deverrouillage
+        etat={etatEffectif}
+        ouvrir={ouvrirAvecCode}
+        coller={reprendreColle}
+        annuler={sansEffectif ? null : () => setCodeDemande(false)}
+      />
+    );
+  }
+
   const onglets = [
     { id: "plateau", label: "Plateau", icon: ClipboardList },
     { id: "equipes", label: "Équipes", icon: Users },
@@ -787,6 +1005,11 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5">
+        <BandeauEffectif
+          etat={etatEffectif}
+          action={etatEffectif === "code_perime" ? () => setCodeDemande(true) : null}
+          libelleAction="Saisir le code"
+        />
         {onglet === "plateau" && (
           <VuePlateau plateau={plateau} setPlateau={setPlateau} effectif={effectif}
             allerEffectif={() => setOnglet("effectif")} />
@@ -816,6 +1039,9 @@ export default function App() {
             setEffectif={setEffectif}
             affectation={affectation}
             retirer={retirerDeLEffectif}
+            etat={etatEffectif}
+            demanderCode={() => setCodeDemande(true)}
+            oublierCode={oublierCode}
           />
         )}
       </main>
@@ -840,6 +1066,175 @@ export default function App() {
           })}
         </div>
       </nav>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Effectif : déverrouillage et état                                  */
+/* ------------------------------------------------------------------ */
+const ERREURS_CODE = {
+  CODE_INCORRECT: "Ce code n'ouvre pas l'effectif. Vérifiez la saisie.",
+  FICHIER_INDISPONIBLE: "L'effectif n'a pas pu être téléchargé. Vérifiez la connexion, puis réessayez.",
+  FORMAT_INCONNU: "Le fichier d'effectif n'est pas dans un format reconnu.",
+  FICHIER_VIDE: "Le fichier d'effectif ne contient aucune ligne.",
+  CONTEXTE_NON_SUR: "Le déchiffrement demande une adresse en https.",
+};
+
+const MESSAGES_EFFECTIF = {
+  hors_ligne: "Pas de réseau : l'effectif enregistré sur cet appareil est utilisé.",
+  mis_a_jour: "L'effectif publié a changé, il vient d'être mis à jour.",
+  code_perime: "L'effectif a été republié avec un autre code.",
+  indisponible: "L'effectif publié est injoignable pour l'instant.",
+};
+
+const SOURCE_EFFECTIF = {
+  chargement: "Vérification de l'effectif publié…",
+  a_jour: "Effectif publié, à jour.",
+  mis_a_jour: "Effectif publié, mis à jour à l'ouverture.",
+  hors_ligne: "Effectif enregistré sur cet appareil, pas de réseau pour vérifier.",
+  code_perime: "Le code enregistré n'ouvre plus l'effectif publié.",
+  indisponible: "Effectif publié injoignable.",
+  local: "Effectif importé sur cet appareil.",
+  colle: "Effectif repris d'une liste collée.",
+  code_requis: "Aucun effectif sur cet appareil.",
+};
+
+function BandeauEffectif({ etat, action, libelleAction }) {
+  const texte = MESSAGES_EFFECTIF[etat];
+  if (!texte) return null;
+  const doux = etat === "mis_a_jour";
+  return (
+    <div className="rounded-lg border px-3 py-2.5 mb-4 text-sm flex items-start gap-2"
+      style={{
+        borderColor: doux ? C.terrain : C.brassard,
+        background: doux ? C.terrainSoft : "#FBF3E2",
+      }}>
+      {doux
+        ? <Check size={14} className="mt-0.5 shrink-0" style={{ color: C.terrain }} />
+        : <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />}
+      <span className="flex-1">{texte}</span>
+      {action && (
+        <button onClick={action} className="shrink-0 font-medium" style={{ color: C.terrain }}>
+          {libelleAction}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* Première ouverture sur un appareil : le code de l'effectif, ou une liste
+   collée pour le soir où le code n'est pas sous la main. */
+function Deverrouillage({ etat, ouvrir, coller, annuler }) {
+  const [code, setCode] = useState("");
+  const [texte, setTexte] = useState("");
+  const [collageOuvert, setCollageOuvert] = useState(false);
+  const [enCours, setEnCours] = useState(false);
+  const [erreur, setErreur] = useState(null);
+
+  const valider = async () => {
+    if (!code.trim() || enCours) return;
+    setEnCours(true);
+    setErreur(null);
+    try {
+      await ouvrir(code.trim());
+    } catch (e) {
+      setErreur(ERREURS_CODE[e.message] || "Le déverrouillage a échoué. Réessayez dans un instant.");
+    } finally {
+      setEnCours(false);
+    }
+  };
+
+  const validerCollage = () => {
+    setErreur(null);
+    try {
+      coller(texte);
+    } catch (e) {
+      setErreur(e.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen" style={{ background: C.craie, color: C.ink }}>
+      <div className="max-w-md mx-auto px-5 py-12">
+        <h1 className="text-lg font-semibold tracking-tight">Feuilles de plateau</h1>
+        <p className="text-xs mb-8" style={{ color: C.ink70 }}>
+          {CLUB.nom} · {CLUB.numero}
+        </p>
+
+        <h2 className="text-base font-semibold mb-1">
+          {etat === "code_perime" ? "Nouveau code" : "Code de l'effectif"}
+        </h2>
+        <p className="text-sm mb-6" style={{ color: C.ink70 }}>
+          {etat === "code_perime"
+            ? "L'effectif a été republié avec un autre code. Saisissez-le pour récupérer la liste à jour."
+            : "Saisissez le code une fois : la liste des joueurs est ensuite conservée sur cet appareil."}
+        </p>
+
+        <input
+          type="password"
+          value={code}
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && valider()}
+          aria-label="Code de l'effectif"
+          className="w-full border rounded-md px-3 py-3 text-base"
+          style={styleInput}
+        />
+
+        <button onClick={valider} disabled={enCours || !code.trim()}
+          className="w-full mt-3 py-3 rounded-md text-sm font-medium"
+          style={{
+            background: C.terrain,
+            color: "#fff",
+            opacity: enCours || !code.trim() ? 0.45 : 1,
+          }}>
+          {enCours ? "Ouverture…" : "Ouvrir l'effectif"}
+        </button>
+
+        {erreur && (
+          <div className="rounded-lg border p-3 mt-4 text-sm flex items-start gap-2"
+            style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
+            <span className="flex-1">{erreur}</span>
+          </div>
+        )}
+
+        <div className="mt-10 rounded-lg border" style={{ background: C.papier, borderColor: C.ligne }}>
+          <button onClick={() => setCollageOuvert((v) => !v)}
+            className="w-full flex items-center gap-1.5 px-3 py-2.5 text-sm text-left"
+            aria-expanded={collageOuvert}>
+            {collageOuvert ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            Pas de code sous la main ? Coller la liste
+          </button>
+          {collageOuvert && (
+            <div className="px-3 pb-3">
+              <p className="text-xs mb-2" style={{ color: C.ink70 }}>
+                Copiez la liste depuis la conversation et collez-la ici. Une ligne par joueur,
+                avec au minimum le nom et le numéro de licence.
+              </p>
+              <textarea rows={7} value={texte} onChange={(e) => setTexte(e.target.value)}
+                placeholder={"AZEB Noah 9604860480 U8\nBELAL Kayden 9605007236 U8"}
+                className="w-full border rounded-md px-3 py-2 text-xs font-mono"
+                style={styleInput} />
+              <button onClick={validerCollage} disabled={!texte.trim()}
+                className="w-full mt-2 py-2.5 rounded-md border text-sm"
+                style={{ borderColor: C.terrain, color: C.terrain, opacity: texte.trim() ? 1 : 0.45 }}>
+                Reprendre cette liste
+              </button>
+            </div>
+          )}
+        </div>
+
+        {annuler && (
+          <button onClick={annuler} className="mt-6 text-sm" style={{ color: C.ink70 }}>
+            Revenir à l'application
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1169,12 +1564,16 @@ function JaugeEquipe({ n }) {
 /* ------------------------------------------------------------------ */
 /*  Vue Effectif — import / export CSV                                 */
 /* ------------------------------------------------------------------ */
-function VueEffectif({ effectif, setEffectif, affectation, retirer }) {
+function VueEffectif({
+  effectif, setEffectif, affectation, retirer, etat, demanderCode, oublierCode,
+}) {
   const fichier = useRef(null);
   const [message, setMessage] = useState(null);
   const [replis, setReplis] = useState(null);
   const [exempleOuvert, setExempleOuvert] = useState(false);
   const [ajout, setAjout] = useState(null);
+  const [collageOuvert, setCollageOuvert] = useState(false);
+  const [texteColle, setTexteColle] = useState("");
 
   const exporter = () => {
     const csv = versCSV(effectif);
@@ -1205,26 +1604,30 @@ function VueEffectif({ effectif, setEffectif, affectation, retirer }) {
         setMessage({ ton: "alerte", texte: erreur || "Aucune ligne lisible dans ce fichier." });
         return;
       }
-      const parId = new Map(effectif.map((p) => [p.id, p]));
-      let ajoutes = 0, majs = 0;
-      personnes.forEach((p) => {
-        if (parId.has(p.id)) { parId.set(p.id, { ...parId.get(p.id), ...p }); majs++; }
-        else { parId.set(p.id, p); ajoutes++; }
-      });
-      setEffectif([...parId.values()]);
-      const bouts = [];
-      if (ajoutes) bouts.push(`${ajoutes} ajouté${ajoutes > 1 ? "s" : ""}`);
-      if (majs) bouts.push(`${majs} mis à jour`);
-      if (ignorees?.length) bouts.push(`${ignorees.length} ligne(s) ignorée(s)`);
-      setMessage({ ton: "ok", texte: bouts.join(", ") + "." });
+      const { liste, ajoutes, majs } = fusion(effectif, personnes);
+      setEffectif(liste);
+      setMessage({ ton: "ok", texte: bilan(ajoutes, majs, ignorees?.length || 0) });
     };
     lecteur.readAsText(f, "utf-8");
     evt.target.value = "";
   };
 
+  const reprendreColle = () => {
+    const { personnes, erreur, ignorees } = depuisColle(texteColle);
+    if (erreur || !personnes.length) {
+      setMessage({ ton: "alerte", texte: erreur || "Aucune ligne lisible dans ce texte." });
+      return;
+    }
+    const { liste, ajoutes, majs } = fusion(effectif, personnes);
+    setEffectif(liste);
+    setMessage({ ton: "ok", texte: bilan(ajoutes, majs, ignorees?.length || 0) });
+    setCollageOuvert(false);
+    setTexteColle("");
+  };
+
   const viderEffectif = () => {
     if (!effectif.length) return;
-    setMessage({ ton: "alerte", texte: "Effectif vidé. Réimportez le CSV pour le retrouver." });
+    setMessage({ ton: "alerte", texte: "Effectif vidé. Rouvrez l'application pour le récupérer depuis l'effectif publié." });
     effectif.slice().forEach((p) => retirer(p.id));
   };
 
@@ -1256,9 +1659,21 @@ function VueEffectif({ effectif, setEffectif, affectation, retirer }) {
           <input ref={fichier} type="file" accept=".csv,.txt,text/csv" onChange={importer} className="hidden" />
         </div>
       </div>
-      <p className="text-sm mb-4" style={{ color: C.ink70 }}>
+      <p className="text-sm mb-3" style={{ color: C.ink70 }}>
         Joueurs et délégués restent dans ce navigateur. Ils ne sont envoyés nulle part.
       </p>
+
+      <div className="rounded-lg border px-3 py-2.5 mb-4 flex items-center justify-between gap-3 text-xs"
+        style={{ background: C.papier, borderColor: C.ligne }}>
+        <span style={{ color: C.ink70 }}>{SOURCE_EFFECTIF[etat] || "Effectif local."}</span>
+        <button
+          onClick={["a_jour", "mis_a_jour", "hors_ligne", "code_perime"].includes(etat) ? oublierCode : demanderCode}
+          className="shrink-0 font-medium" style={{ color: C.terrain }}>
+          {["a_jour", "mis_a_jour", "hors_ligne", "code_perime"].includes(etat)
+            ? "Changer le code"
+            : "Saisir le code"}
+        </button>
+      </div>
 
       {message && (
         <div className="rounded-lg border p-3 mb-4 text-sm flex items-start gap-2"
@@ -1308,11 +1723,38 @@ function VueEffectif({ effectif, setEffectif, affectation, retirer }) {
             className="flex items-center gap-1" style={{ color: C.terrain }}>
             <Plus size={14} /> Ajouter
           </button>
+          <button onClick={() => setCollageOuvert((v) => !v)} style={{ color: C.terrain }}>
+            Coller
+          </button>
           {effectif.length > 0 && (
             <button onClick={viderEffectif} style={{ color: C.alerte }}>Vider</button>
           )}
         </div>
       </div>
+
+      {collageOuvert && (
+        <div className="rounded-lg border p-3 mb-4" style={{ background: C.papier, borderColor: C.ligne }}>
+          <p className="text-xs mb-2" style={{ color: C.ink70 }}>
+            Collez la liste reçue par message. Une ligne par joueur, avec au minimum
+            le nom et le numéro de licence.
+          </p>
+          <textarea rows={7} value={texteColle} onChange={(e) => setTexteColle(e.target.value)}
+            placeholder={"AZEB Noah 9604860480 U8\nBELAL Kayden 9605007236 U8"}
+            className="w-full border rounded-md px-3 py-2 text-xs font-mono" style={styleInput} />
+          <div className="flex gap-2 mt-2">
+            <button onClick={reprendreColle} disabled={!texteColle.trim()}
+              className="px-3 py-1.5 rounded-md text-xs"
+              style={{ background: C.terrain, color: "#fff", opacity: texteColle.trim() ? 1 : 0.45 }}>
+              Reprendre cette liste
+            </button>
+            <button onClick={() => { setCollageOuvert(false); setTexteColle(""); }}
+              className="px-3 py-1.5 rounded-md border text-xs"
+              style={{ borderColor: C.ligne, color: C.ink70 }}>
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
 
       {ajout && (
         <FormulairePersonne
@@ -1338,7 +1780,7 @@ function VueEffectif({ effectif, setEffectif, affectation, retirer }) {
       {liste.length === 0 ? (
         <div className="text-center py-12 rounded-lg border border-dashed" style={{ borderColor: C.ligne }}>
           <p className="text-sm" style={{ color: C.ink70 }}>
-            Aucune ligne pour l'instant.<br />Importez le CSV des licenciés pour commencer.
+            Aucune ligne pour l'instant.<br />Saisissez le code de l'effectif, ou collez la liste reçue.
           </p>
         </div>
       ) : (
