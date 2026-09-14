@@ -213,7 +213,7 @@ async function dechiffrerPaquet(paquet, phrase) {
   return new TextDecoder().decode(clair);
 }
 
-/* Découpe « DI GREGORIO Jules » en nom de famille et prénom : les mots en
+/* Découpe « UN NOM COMPOSE Jean » en nom de famille et prénom : les mots en
    capitales du début appartiennent au nom. */
 function coupeNom(entier) {
   const mots = entier.split(" ").filter(Boolean);
@@ -229,7 +229,7 @@ function coupeNom(entier) {
 }
 
 /* Un effectif collé depuis une conversation : soit le CSV complet, soit des
-   lignes libres du genre « AZEB Noah 9604860480 U8 21/05/2019 ». */
+   lignes libres du genre « NOM Prenom 19850521345480 U8 01/01/2000 ». */
 function depuisColle(texte) {
   const lignes = (texte || "").replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
   if (!lignes.length) return { personnes: [], erreur: "Rien n'a été collé." };
@@ -644,9 +644,9 @@ function pagePremiere(plateau, equipes, personneDe) {
   p.cadre(encX, encT, encL, encH, 0.8);
   const encMil = encX + encL / 2;
   p.centre(encMil, encT + 18, 11, "F3", `FOOTBALL à 5 (${cat})`);
-  p.rouge(true);
+  //p.rouge(true);
   p.centre(encMil, encT + 40, 14, "F2", "FEUILLE DE MATCH");
-  p.rouge(false);
+  //p.rouge(false);
   p.image(IMAGES[2], encMil - 56, encT + 48, 112);
 
   p.centre(A4.l / 2, 186, 14, "F2", "Composition des équipes :");
