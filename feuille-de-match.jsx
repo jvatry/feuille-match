@@ -776,6 +776,20 @@ const stockage = {
 };
 
 /* ------------------------------------------------------------------ */
+/*  Suivi d'usage — un compteur, rien de plus. Aucun nom, aucune       */
+/*  licence, aucun lieu ni date de plateau ne sort d'ici.              */
+/* ------------------------------------------------------------------ */
+const SUIVI = typeof location !== "undefined" && location.protocol === "https:";
+
+function suivi(evenement) {
+  if (!SUIVI) return;
+  try {
+    window.goatcounter?.count({ path: evenement, title: evenement, event: true });
+  } catch (e) { /* bloqueur, hors ligne : sans importance */ }
+}
+
+
+/* ------------------------------------------------------------------ */
 /*  Application                                                        */
 /* ------------------------------------------------------------------ */
 export default function App() {
@@ -846,7 +860,9 @@ export default function App() {
         setOnglet("plateau");
         setPret(true);
       }
-      setEtatEffectif(await synchroniser(liste));
+      const etat = await synchroniser(liste);
+      setEtatEffectif(etat);
+      suivi(`ouverture/${etat}`);
       if (liste.length === 0) setOnglet("plateau");
       setPret(true);
     })();
@@ -1217,7 +1233,7 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
                 avec au minimum le nom et le numéro de licence.
               </p>
               <textarea rows={7} value={texte} onChange={(e) => setTexte(e.target.value)}
-                placeholder={"AZEB Noah 9604860480 U8\nBELAL Kayden 9605007236 U8"}
+                placeholder={"DUPONT Jean 198052485354 U8\nBAR Joe 12647327 U9"}
                 className="w-full border rounded-md px-3 py-2 text-xs font-mono"
                 style={styleInput} />
               <button onClick={validerCollage} disabled={!texte.trim()}
@@ -1739,7 +1755,7 @@ function VueEffectif({
             le nom et le numéro de licence.
           </p>
           <textarea rows={7} value={texteColle} onChange={(e) => setTexteColle(e.target.value)}
-            placeholder={"AZEB Noah 9604860480 U8\nBELAL Kayden 9605007236 U8"}
+            placeholder={"DUPONT Jean 198052485354 U8\nBAR Joe 12647327 U9"}
             className="w-full border rounded-md px-3 py-2 text-xs font-mono" style={styleInput} />
           <div className="flex gap-2 mt-2">
             <button onClick={reprendreColle} disabled={!texteColle.trim()}
@@ -1888,7 +1904,9 @@ function VueFeuille({ plateau, equipes, personneDe }) {
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       setMessage("PDF généré. Ouvrez-le pour l'imprimer ou l'envoyer.");
+      suivi("pdf/genere");
     } catch (e) {
+      suivi("pdf/echec")
       setMessage("Le PDF n'a pas pu être créé ici. Ouvrez l'application dans un onglet du navigateur et réessayez.");
     }
   };
