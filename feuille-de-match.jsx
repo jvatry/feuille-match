@@ -853,7 +853,13 @@ export default function App() {
         const v = await stockage.lire(CLE_PLATEAU);
         if (v) {
           const d = JSON.parse(v);
-          if (d.plateau) setPlateau(d.plateau);
+          if (d.plateau) {
+            /* Un plateau sauvegardé avant l'introduction du type de plateau
+               n'a pas de champ `type` (il avait `categorie`) : on retombe sur
+               l'unique type existant plutôt que de planter. */
+            const type = TYPES_PLATEAU[d.plateau.type] ? d.plateau.type : "U9";
+            setPlateau({ ...d.plateau, type });
+          }
           if (d.equipes?.length) {
             setEquipes(d.equipes);
             setEquipeActive(d.equipes[0].id);
@@ -1355,7 +1361,13 @@ function VueEquipes({
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
 }) {
   const [recherche, setRecherche] = useState("");
-  const [categoriesVisibles, setCategoriesVisibles] = useState({ U8: true, U9: true });
+  const categoriesJoueurs = TYPES_PLATEAU[plateau.type].categoriesJoueurs;
+  const [categoriesVisibles, setCategoriesVisibles] = useState(() =>
+    Object.fromEntries(categoriesJoueurs.map((c) => [c, true]))
+  );
+  useEffect(() => {
+    setCategoriesVisibles(Object.fromEntries(categoriesJoueurs.map((c) => [c, true])));
+  }, [plateau.type]);
   const toggleCategorie = (cat) =>
     setCategoriesVisibles((v) => ({ ...v, [cat]: !v[cat] }));
   const active = equipes.find((e) => e.id === equipeActive) || equipes[0];
@@ -1492,9 +1504,9 @@ function VueEquipes({
             )}
           </div>
 
-          {plateau.categorie === "Mixte" && (
+          {categoriesJoueurs.length > 1 && (
             <div className="flex gap-2 mb-2">
-              {["U8", "U9"].map((cat) => {
+              {categoriesJoueurs.map((cat) => {
                 const actif = categoriesVisibles[cat];
                 return (
                   <button key={cat} type="button" onClick={() => toggleCategorie(cat)}
