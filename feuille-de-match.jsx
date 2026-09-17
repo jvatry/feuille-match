@@ -1348,6 +1348,9 @@ function VueEquipes({
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
 }) {
   const [recherche, setRecherche] = useState("");
+  const [categoriesVisibles, setCategoriesVisibles] = useState({ U8: true, U9: true });
+  const toggleCategorie = (cat) =>
+    setCategoriesVisibles((v) => ({ ...v, [cat]: !v[cat] }));
   const active = equipes.find((e) => e.id === equipeActive) || equipes[0];
 
   useEffect(() => {
@@ -1376,7 +1379,12 @@ function VueEquipes({
     return [{ titre: null, joueurs: filtre(plateau.categorie) }];
   }, [effectif, plateau.categorie, recherche]);
 
-  const total = sections.reduce((n, s) => n + s.joueurs.length, 0);
+  const sectionsAffichees = useMemo(
+    () => sections.filter((s) => !s.titre || categoriesVisibles[s.titre]),
+    [sections, categoriesVisibles]
+  );
+
+  const total = sectionsAffichees.reduce((n, s) => n + s.joueurs.length, 0);
 
   if (!effectif.length) {
     return (
@@ -1478,6 +1486,27 @@ function VueEquipes({
             )}
           </div>
 
+          {plateau.categorie === "Mixte" && (
+            <div className="flex gap-2 mb-2">
+              {["U8", "U9"].map((cat) => {
+                const actif = categoriesVisibles[cat];
+                return (
+                  <button key={cat} type="button" onClick={() => toggleCategorie(cat)}
+                    aria-pressed={actif}
+                    className="px-4 py-2 rounded-md border text-sm"
+                    style={{
+                      borderColor: actif ? C.terrain : C.ligne,
+                      background: actif ? C.terrainSoft : C.papier,
+                      color: actif ? C.terrain : C.ink70,
+                      fontWeight: actif ? 600 : 400,
+                    }}>
+                    {cat}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="relative mb-3">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: C.ink70 }} />
             <input value={recherche} onChange={(e) => setRecherche(e.target.value)}
@@ -1491,7 +1520,7 @@ function VueEquipes({
             </p>
           )}
 
-          {sections.map((s) => (
+          {sectionsAffichees.map((s) => (
             <div key={s.titre ?? "tous"} className="mb-4">
               {s.titre && (
                 <div className="flex items-baseline gap-2 mb-2 pb-1 border-b" style={{ borderColor: C.ligne }}>
