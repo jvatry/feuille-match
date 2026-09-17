@@ -35,8 +35,15 @@ const CLE_EMPREINTE = "feuilles:empreinte";
 /* Effectif chiffré publié à côté de l'application. */
 const URL_EFFECTIF = "./effectif.enc.json";
 
+/* Un type de plateau associe les catégories de joueurs qu'il mélange. Pour
+   l'instant un seul type existe (U9 : plateaux U8/U9 du club) ; un futur type
+   U7 (U6/U7, pour un autre club) s'ajouterait ici sans toucher au reste. */
+const TYPES_PLATEAU = {
+  U9: { label: "U9", categoriesJoueurs: ["U8", "U9"] },
+};
+
 const PLATEAU_VIDE = {
-  categorie: "U8",   // U8 · U9 · Mixte
+  type: "U9",
   date: "",
   lieu: "",
   secteur: "",
@@ -298,7 +305,7 @@ function fusion(actuel, personnes) {
 /* ------------------------------------------------------------------ */
 const BLOCS_PAR_PAGE = 4;   // quatre blocs d'équipe par page, comme sur le modèle
 
-const intitule = (categorie) => (categorie === "Mixte" ? "U8 / U9" : categorie);
+const intitule = (type) => TYPES_PLATEAU[type].categoriesJoueurs.join(" / ");
 
 const dateFrancaise = (iso) =>
   iso ? new Date(iso + "T12:00").toLocaleDateString("fr-FR") : "";
@@ -408,7 +415,7 @@ function grilleHTML(equipes, page, personneDe) {
 }
 
 function feuilleHTML(plateau, equipes, personneDe) {
-  const cat = "U9";
+  const cat = intitule(plateau.type);
   const secondePage = equipes.length > BLOCS_PAR_PAGE;
 
   const entete = `
@@ -630,7 +637,7 @@ function grillePDF(p, equipes, page, personneDe, htGrille) {
 
 function pagePremiere(plateau, equipes, personneDe) {
   const p = crayon();
-  const cat = "U9" /*intitule(plateau.categorie);*/
+  const cat = intitule(plateau.type);
 
   /* En-tête : les trois visuels du modèle */
   p.image(IMAGES[0], xG + 4, 24, 74);
@@ -945,7 +952,7 @@ export default function App() {
     setEquipes((prev) => (prev.length === 1 ? prev : prev.filter((e) => e.id !== id)));
 
   const nouveauPlateau = () => {
-    setPlateau({ ...PLATEAU_VIDE, secteur: plateau.secteur, groupe: plateau.groupe, categorie: plateau.categorie });
+    setPlateau({ ...PLATEAU_VIDE, secteur: plateau.secteur, groupe: plateau.groupe, type: plateau.type });
     const e = equipeVide(1);
     setEquipes([e]);
     setEquipeActive(e.id);
@@ -1295,18 +1302,18 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif }) {
         </div>
       )}
 
-      <Champ label="Catégorie" aide="Mixte affiche les U8 et les U9 en deux listes séparées.">
+      <Champ label="Type de plateau">
         <div className="flex gap-2">
-          {["U8", "U9", "Mixte"].map((c) => (
-            <button key={c} onClick={() => setPlateau({ ...plateau, categorie: c })}
+          {Object.keys(TYPES_PLATEAU).map((t) => (
+            <button key={t} onClick={() => setPlateau({ ...plateau, type: t })}
               className="px-4 py-2 rounded-md border text-sm"
               style={{
-                borderColor: plateau.categorie === c ? C.terrain : C.ligne,
-                background: plateau.categorie === c ? C.terrainSoft : C.papier,
-                color: plateau.categorie === c ? C.terrain : C.ink70,
-                fontWeight: plateau.categorie === c ? 600 : 400,
+                borderColor: plateau.type === t ? C.terrain : C.ligne,
+                background: plateau.type === t ? C.terrainSoft : C.papier,
+                color: plateau.type === t ? C.terrain : C.ink70,
+                fontWeight: plateau.type === t ? 600 : 400,
               }}>
-              {c}
+              {TYPES_PLATEAU[t].label}
             </button>
           ))}
         </div>
@@ -1362,7 +1369,8 @@ function VueEquipes({
     [effectif]
   );
 
-  /* En mixte, deux listes distinctes ; sinon une seule. Toujours triées par nom. */
+  /* Une liste par catégorie de joueurs mélangée dans ce type de plateau ; une
+     seule catégorie donne une liste sans titre. Toujours triées par nom. */
   const sections = useMemo(() => {
     const q = sansAccent(recherche);
     const filtre = (cat) =>
@@ -1370,14 +1378,12 @@ function VueEquipes({
         .filter((p) => !estDelegue(p) && p.categorie === cat)
         .filter((p) => !q || sansAccent(`${p.nom} ${p.prenom}`).includes(q))
         .sort(parNom);
-    if (plateau.categorie === "Mixte") {
-      return [
-        { titre: "U8", joueurs: filtre("U8") },
-        { titre: "U9", joueurs: filtre("U9") },
-      ];
+    const categories = TYPES_PLATEAU[plateau.type].categoriesJoueurs;
+    if (categories.length === 1) {
+      return [{ titre: null, joueurs: filtre(categories[0]) }];
     }
-    return [{ titre: null, joueurs: filtre(plateau.categorie) }];
-  }, [effectif, plateau.categorie, recherche]);
+    return categories.map((cat) => ({ titre: cat, joueurs: filtre(cat) }));
+  }, [effectif, plateau.type, recherche]);
 
   const sectionsAffichees = useMemo(
     () => sections.filter((s) => !s.titre || categoriesVisibles[s.titre]),
