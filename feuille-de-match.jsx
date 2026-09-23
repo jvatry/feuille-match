@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Trash2, Printer, Users, FileText, ClipboardList, Search,
   RotateCcw, AlertTriangle, Check, UserPlus, X, Download, Upload,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Pencil,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -56,12 +56,16 @@ const TYPES_PLATEAU = {
   U9: { label: "U9", categoriesJoueurs: ["U8", "U9"] },
 };
 
+/* Secteur et groupe du club : pré-remplis, modifiables sur l'onglet Plateau. */
+const SECTEUR_DEFAUT = "Sidérurgie";
+const GROUPE_DEFAUT = "EST";
+
 const PLATEAU_VIDE = {
   type: "U9",
   date: "",
   lieu: "",
-  secteur: "",
-  groupe: "",
+  secteur: SECTEUR_DEFAUT,
+  groupe: GROUPE_DEFAUT,
   responsable: "",
 };
 
@@ -1074,7 +1078,13 @@ export default function App() {
                n'a pas de champ `type` (il avait `categorie`) : on retombe sur
                l'unique type existant plutôt que de planter. */
             const type = TYPES_PLATEAU[d.plateau.type] ? d.plateau.type : "U9";
-            setPlateau({ ...d.plateau, type });
+            /* Secteur ou groupe resté vide : les valeurs du club. */
+            setPlateau({
+              ...d.plateau,
+              type,
+              secteur: d.plateau.secteur || SECTEUR_DEFAUT,
+              groupe: d.plateau.groupe || GROUPE_DEFAUT,
+            });
           }
           if (d.equipes?.length) {
             setEquipes(d.equipes);
@@ -1637,6 +1647,52 @@ function Champ({ label, children, aide }) {
 
 const styleInput = { background: C.papier, borderColor: C.ligne, color: C.ink };
 
+/* Une valeur presque toujours la même : le champ est pré-rempli et grisé, le
+   crayon le rend modifiable. Vidé, il reprend la valeur par défaut. */
+function ChampModifiable({ label, valeur, defaut, changer }) {
+  const [actif, setActif] = useState(false);
+  const champ = useRef(null);
+  const avant = useRef(valeur);
+
+  useEffect(() => { if (actif) champ.current?.focus(); }, [actif]);
+
+  const activer = () => {
+    avant.current = valeur;
+    setActif(true);
+  };
+  const terminer = () => {
+    if (!valeur.trim()) changer(defaut);
+    setActif(false);
+  };
+
+  return (
+    <div className="mb-4">
+      <span className="block text-xs mb-1.5" style={{ color: C.ink70 }}>{label}</span>
+      <div className="flex items-center gap-2">
+        <input ref={champ} value={valeur} disabled={!actif} aria-label={label}
+          onChange={(e) => changer(e.target.value)}
+          onBlur={terminer}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") terminer();
+            if (e.key === "Escape") { changer(avant.current); setActif(false); }
+          }}
+          className="flex-1 min-w-0 border rounded-md px-3 py-2 text-sm"
+          style={actif ? styleInput : { ...styleInput, background: C.craie, color: C.ink70 }} />
+        <button
+          onMouseDown={(e) => actif && e.preventDefault()}
+          onClick={actif ? terminer : activer}
+          aria-label={actif ? `Valider ${label.toLowerCase()}` : `Modifier ${label.toLowerCase()}`}
+          className="p-2 rounded-md border shrink-0"
+          style={actif
+            ? { background: C.terrain, borderColor: C.terrain, color: "#fff" }
+            : { borderColor: C.ligne, color: C.terrain, background: C.papier }}>
+          {actif ? <Check size={15} /> : <Pencil size={15} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Vue Plateau                                                        */
 /* ------------------------------------------------------------------ */
@@ -1689,15 +1745,11 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif }) {
           className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
       </Champ>
 
-      <Champ label="Secteur">
-        <input value={plateau.secteur} onChange={maj("secteur")} placeholder="Secteur Sidérurgie Ouest"
-          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
-      </Champ>
+      <ChampModifiable label="Secteur" valeur={plateau.secteur} defaut={SECTEUR_DEFAUT}
+        changer={(secteur) => setPlateau({ ...plateau, secteur })} />
 
-      <Champ label="Groupe">
-        <input value={plateau.groupe} onChange={maj("groupe")} placeholder="Niveau 2"
-          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
-      </Champ>
+      <ChampModifiable label="Groupe" valeur={plateau.groupe} defaut={GROUPE_DEFAUT}
+        changer={(groupe) => setPlateau({ ...plateau, groupe })} />
 
       <Champ label="Responsable du plateau" aide="Laissez vide pour le remplir à la main sur place.">
         <input value={plateau.responsable || ""} onChange={maj("responsable")} placeholder="Nom Prénom"
