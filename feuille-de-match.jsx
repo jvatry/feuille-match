@@ -40,7 +40,7 @@ const URL_EFFECTIF = "./effectif.enc.json";
 
 /* Relais qui met en ligne l'effectif chiffré (voir relais/README.md). Vide :
    le bouton Publier explique que la publication n'est pas encore activée. */
-const URL_RELAIS = "";
+const URL_RELAIS = "https://feuille-match-relais.jvatry.workers.dev";
 
 /* Mêmes paramètres que chiffrer-effectif.mjs. */
 const ITERATIONS = 250000;
