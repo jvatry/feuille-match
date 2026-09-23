@@ -1647,46 +1647,48 @@ function Champ({ label, children, aide }) {
 
 const styleInput = { background: C.papier, borderColor: C.ligne, color: C.ink };
 
-/* Une valeur presque toujours la même : affichée en clair, le crayon permet
-   de la changer. Vidée, elle reprend la valeur par défaut. */
+/* Une valeur presque toujours la même : le champ est pré-rempli et grisé, le
+   crayon le rend modifiable. Vidé, il reprend la valeur par défaut. */
 function ChampModifiable({ label, valeur, defaut, changer }) {
-  const [saisie, setSaisie] = useState(null);
+  const [actif, setActif] = useState(false);
+  const champ = useRef(null);
+  const avant = useRef(valeur);
 
-  const valider = () => {
-    changer(saisie.trim() || defaut);
-    setSaisie(null);
+  useEffect(() => { if (actif) champ.current?.focus(); }, [actif]);
+
+  const activer = () => {
+    avant.current = valeur;
+    setActif(true);
+  };
+  const terminer = () => {
+    if (!valeur.trim()) changer(defaut);
+    setActif(false);
   };
 
   return (
     <div className="mb-4">
       <span className="block text-xs mb-1.5" style={{ color: C.ink70 }}>{label}</span>
-      {saisie === null ? (
-        <div className="flex items-center gap-2">
-          <span className="flex-1 text-sm py-2">{valeur}</span>
-          <button onClick={() => setSaisie(valeur)} aria-label={`Modifier ${label.toLowerCase()}`}
-            className="p-2 rounded-md border" style={{ borderColor: C.ligne, color: C.terrain }}>
-            <Pencil size={15} />
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          <input value={saisie} autoFocus onChange={(e) => setSaisie(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") valider();
-              if (e.key === "Escape") setSaisie(null);
-            }}
-            aria-label={label}
-            className="flex-1 border rounded-md px-3 py-2 text-base" style={styleInput} />
-          <button onClick={valider} aria-label="Valider"
-            className="p-2 rounded-md" style={{ background: C.terrain, color: "#fff" }}>
-            <Check size={15} />
-          </button>
-          <button onClick={() => setSaisie(null)} aria-label="Annuler"
-            className="p-2 rounded-md border" style={{ borderColor: C.ligne, color: C.ink70 }}>
-            <X size={15} />
-          </button>
-        </div>
-      )}
+      <div className="flex items-center gap-2">
+        <input ref={champ} value={valeur} disabled={!actif} aria-label={label}
+          onChange={(e) => changer(e.target.value)}
+          onBlur={terminer}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") terminer();
+            if (e.key === "Escape") { changer(avant.current); setActif(false); }
+          }}
+          className="flex-1 min-w-0 border rounded-md px-3 py-2 text-sm"
+          style={actif ? styleInput : { ...styleInput, background: C.craie, color: C.ink70 }} />
+        <button
+          onMouseDown={(e) => actif && e.preventDefault()}
+          onClick={actif ? terminer : activer}
+          aria-label={actif ? `Valider ${label.toLowerCase()}` : `Modifier ${label.toLowerCase()}`}
+          className="p-2 rounded-md border shrink-0"
+          style={actif
+            ? { background: C.terrain, borderColor: C.terrain, color: "#fff" }
+            : { borderColor: C.ligne, color: C.terrain, background: C.papier }}>
+          {actif ? <Check size={15} /> : <Pencil size={15} />}
+        </button>
+      </div>
     </div>
   );
 }
