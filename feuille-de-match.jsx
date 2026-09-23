@@ -66,6 +66,7 @@ const PLATEAU_VIDE = {
   lieu: "",
   secteur: SECTEUR_DEFAUT,
   groupe: GROUPE_DEFAUT,
+  defautsClub: true,   // marque les plateaux qui ont déjà reçu ces valeurs
   responsable: "",
 };
 
@@ -1078,12 +1079,16 @@ export default function App() {
                n'a pas de champ `type` (il avait `categorie`) : on retombe sur
                l'unique type existant plutôt que de planter. */
             const type = TYPES_PLATEAU[d.plateau.type] ? d.plateau.type : "U9";
-            /* Secteur ou groupe resté vide : les valeurs du club. */
+            /* Un plateau enregistré avant les valeurs du club (sans
+               `defautsClub`) les reçoit une fois ; ensuite, ce que le délégué
+               a choisi au crayon est conservé. Vide : les valeurs du club. */
+            const ancien = !d.plateau.defautsClub;
             setPlateau({
               ...d.plateau,
               type,
-              secteur: d.plateau.secteur || SECTEUR_DEFAUT,
-              groupe: d.plateau.groupe || GROUPE_DEFAUT,
+              secteur: (!ancien && d.plateau.secteur) || SECTEUR_DEFAUT,
+              groupe: (!ancien && d.plateau.groupe) || GROUPE_DEFAUT,
+              defautsClub: true,
             });
           }
           if (d.equipes?.length) {
