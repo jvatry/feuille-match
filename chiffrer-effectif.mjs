@@ -13,6 +13,15 @@
  * Sortie  : effectif.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
  *           Ce fichier seul est commité. Le CSV en clair ne l'est jamais.
  *
+ * L'application publie elle-même l'effectif (bouton « Publier » de l'onglet
+ * Effectif), via le relais décrit dans relais/README.md. Ce script reste la
+ * solution de secours, et prépare la configuration du relais :
+ *
+ *   node chiffrer-effectif.mjs --jeton
+ *
+ * affiche l'empreinte du code à donner au relais (EMPREINTE_JETON). Le relais
+ * n'apprend jamais le code lui-même.
+ *
  * Node 18 ou plus. Aucune dépendance.
  */
 
@@ -21,6 +30,7 @@ import { webcrypto as crypto } from "node:crypto";
 import { createInterface } from "node:readline";
 
 const ITERATIONS = 250_000;
+const SEL_PUBLICATION = "feuille-match/publication";   // même valeur que l'application
 
 /* ------------------------------------------------------------------ */
 /* Lecture CSV                                                         */
@@ -137,6 +147,21 @@ async function chiffrer(texte, phrase) {
   };
 }
 
+/* Le jeton que l'application envoie au relais pour prouver qu'elle connaît
+   le code ; le relais n'en garde que le SHA-256. */
+async function empreinteJeton(phrase) {
+  const texte = new TextEncoder();
+  const matiere = await crypto.subtle.importKey("raw", texte.encode(phrase), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: texte.encode(SEL_PUBLICATION), iterations: ITERATIONS, hash: "SHA-256" },
+    matiere,
+    256
+  );
+  const jeton = b64(new Uint8Array(bits));
+  const hache = await crypto.subtle.digest("SHA-256", texte.encode(jeton));
+  return Buffer.from(hache).toString("hex");
+}
+
 /* ------------------------------------------------------------------ */
 /* Saisie masquée                                                      */
 /* ------------------------------------------------------------------ */
@@ -164,7 +189,33 @@ function demanderPhrase(invite) {
 
 /* ------------------------------------------------------------------ */
 
+async function lirePhrase() {
+  let phrase = process.env.FM_PHRASE;
+  if (!phrase) {
+    phrase = await demanderPhrase("Phrase de passe : ");
+    const confirmation = await demanderPhrase("Confirmer        : ");
+    if (phrase !== confirmation) {
+      console.error("Les deux saisies diffèrent. Rien n'a été écrit.");
+      process.exit(1);
+    }
+  }
+  if (phrase.length < 10) {
+    console.error(
+      "Phrase trop courte : 10 caractères minimum, et de préférence trois ou quatre mots. Rien n'a été écrit."
+    );
+    process.exit(1);
+  }
+  return phrase;
+}
+
 async function principal() {
+  if (process.argv[2] === "--jeton") {
+    const empreinte = await empreinteJeton(await lirePhrase());
+    console.log(`\nEMPREINTE_JETON = ${empreinte}`);
+    console.log("À enregistrer comme secret du relais (voir relais/README.md).");
+    return;
+  }
+
   const [entree, sortie = "effectif.enc.json"] = process.argv.slice(2);
 
   if (!entree) {
@@ -189,22 +240,7 @@ async function principal() {
     process.exit(1);
   }
 
-  let phrase = process.env.FM_PHRASE;
-  if (!phrase) {
-    phrase = await demanderPhrase("Phrase de passe : ");
-    const confirmation = await demanderPhrase("Confirmer        : ");
-    if (phrase !== confirmation) {
-      console.error("Les deux saisies diffèrent. Rien n'a été écrit.");
-      process.exit(1);
-    }
-  }
-  if (phrase.length < 10) {
-    console.error(
-      "Phrase trop courte : 10 caractères minimum, et de préférence trois ou quatre mots. Rien n'a été écrit."
-    );
-    process.exit(1);
-  }
-
+  const phrase = await lirePhrase();
   const paquet = await chiffrer(texte, phrase);
   await writeFile(sortie, JSON.stringify(paquet, null, 2) + "\n", "utf8");
 

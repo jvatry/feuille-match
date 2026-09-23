@@ -1,0 +1,14 @@
+name = "feuille-match-relais"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+DEPOT = "jvatry/feuille-match"
+BRANCHE = "main"
+FICHIER = "effectif.enc.json"
+# Adresse(s) de l'application, séparées par des virgules (sans / final).
+ORIGINES = "https://jvatry.github.io"
+
+# Secrets, jamais dans ce fichier :
+#   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put EMPREINTE_JETON

@@ -31,9 +31,23 @@ const CLE_EFFECTIF = "feuilles:effectif";
 const CLE_PLATEAU = "feuilles:plateau";
 const CLE_CODE = "feuilles:code";
 const CLE_EMPREINTE = "feuilles:empreinte";
+const CLE_REMPLACEE = "feuilles:empreinte-remplacee";
+const CLE_PUBLIE = "feuilles:publie";
+const CLE_NOUVEAUTES = "feuilles:nouveautes";
 
 /* Effectif chiffré publié à côté de l'application. */
 const URL_EFFECTIF = "./effectif.enc.json";
+
+/* Relais qui met en ligne l'effectif chiffré (voir relais/README.md). Vide :
+   le bouton Publier explique que la publication n'est pas encore activée. */
+const URL_RELAIS = "";
+
+/* Mêmes paramètres que chiffrer-effectif.mjs. */
+const ITERATIONS = 250000;
+const SEL_PUBLICATION = "feuille-match/publication";
+
+/* Nouvelle vérification de l'effectif publié pendant l'utilisation. */
+const INTERVALLE_VERIFICATION = 5 * 60 * 1000;
 
 /* Un type de plateau associe les catégories de joueurs qu'il mélange. Pour
    l'instant un seul type existe (U9 : plateaux U8/U9 du club) ; un futur type
@@ -63,6 +77,16 @@ const estDelegue = (p) => p.categorie === DELEGUE;
 const parNom = (a, b) =>
   a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr");
 
+const sansAccent = (s) =>
+  (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+
+/* Identifiant stable : le numéro de licence, sinon le nom et le prénom. Deux
+   lectures du même effectif donnent les mêmes identifiants. */
+const idPersonne = (licence, nom, prenom) =>
+  licence || `n:${sansAccent(nom)}|${sansAccent(prenom)}`;
+
+const clePersonne = (p) => idPersonne(p.licence, p.nom, p.prenom);
+
 /* ------------------------------------------------------------------ */
 /*  CSV                                                                */
 /* ------------------------------------------------------------------ */
@@ -74,9 +98,6 @@ const EXEMPLE_CSV = [
   "MARTIN;Elsa;U9;9600000002;02/11/2018;oui",
   "BERNARD;Claire;Délégué;9600000003;;oui",
 ].join("\n");
-
-const sansAccent = (s) =>
-  (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
 function echappe(v) {
   const s = String(v ?? "");
@@ -160,7 +181,7 @@ function depuisCSV(texte) {
     const licence = lire(idx.licence).replace(/\s/g, "");
 
     personnes.push({
-      id: licence || `p${n}${Math.random().toString(36).slice(2, 6)}`,
+      id: idPersonne(licence, nom, prenom),
       nom: nom.toUpperCase(),
       prenom,
       categorie,
@@ -181,14 +202,71 @@ function depuisCSV(texte) {
 /* ------------------------------------------------------------------ */
 const depuisB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-async function cleAES(phrase, sel, iterations) {
+function versB64(octets) {
+  let s = "";
+  octets.forEach((o) => { s += String.fromCharCode(o); });
+  return btoa(s);
+}
+
+async function cleAES(phrase, sel, iterations, usage = "decrypt") {
   const matiere = await crypto.subtle.importKey(
     "raw", new TextEncoder().encode(phrase), "PBKDF2", false, ["deriveKey"]
   );
   return crypto.subtle.deriveKey(
     { name: "PBKDF2", salt: sel, iterations, hash: "SHA-256" },
-    matiere, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
+    matiere, { name: "AES-GCM", length: 256 }, false, [usage]
   );
+}
+
+/* Le même paquet que chiffrer-effectif.mjs, fabriqué sur le téléphone : seul
+   ce texte chiffré quitte l'appareil. */
+async function chiffrerPaquet(texte, phrase) {
+  if (typeof crypto === "undefined" || !crypto.subtle) throw new Error("CONTEXTE_NON_SUR");
+  const sel = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cle = await cleAES(phrase, sel, ITERATIONS, "encrypt");
+  const chiffre = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv }, cle, new TextEncoder().encode(texte)
+  );
+  return {
+    v: 1,
+    algo: "AES-GCM-256",
+    kdf: { nom: "PBKDF2", hash: "SHA-256", iterations: ITERATIONS, sel: versB64(sel) },
+    iv: versB64(iv),
+    donnees: versB64(new Uint8Array(chiffre)),
+    empreinte: versB64(new Uint8Array(await crypto.subtle.digest("SHA-256", chiffre)).slice(0, 8)),
+    genere: new Date().toISOString().slice(0, 10),
+  };
+}
+
+/* Preuve que l'on connaît le code, sans le révéler : le relais n'en garde
+   que l'empreinte (node chiffrer-effectif.mjs --jeton). */
+async function jetonPublication(phrase) {
+  const texte = new TextEncoder();
+  const matiere = await crypto.subtle.importKey(
+    "raw", texte.encode(phrase), "PBKDF2", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: texte.encode(SEL_PUBLICATION), iterations: ITERATIONS, hash: "SHA-256" },
+    matiere, 256
+  );
+  return versB64(new Uint8Array(bits));
+}
+
+async function envoyerPaquet(paquet, jeton) {
+  if (!URL_RELAIS) throw new Error("PUBLICATION_INACTIVE");
+  let reponse;
+  try {
+    reponse = await fetch(URL_RELAIS, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paquet, jeton }),
+    });
+  } catch (e) {
+    throw new Error("RESEAU");
+  }
+  if (reponse.status === 403) throw new Error("CODE_REFUSE");
+  if (!reponse.ok) throw new Error("PUBLICATION_ECHEC");
 }
 
 async function telechargerPaquet(url = URL_EFFECTIF) {
@@ -285,18 +363,96 @@ function bilan(ajoutes, majs, ignorees) {
   return (bouts.length ? bouts.join(", ") : "Aucun changement") + ".";
 }
 
-/* Ce qui arrive écrase ce qui porte le même numéro de licence ; le reste de
-   l'effectif local est conservé, délégués ajoutés à la main compris. */
+/* Ce qui arrive écrase ce qui porte le même numéro de licence (ou, sans
+   licence, les mêmes nom et prénom) ; le reste de l'effectif local est
+   conservé, délégués ajoutés à la main compris. L'identifiant local est
+   gardé : les équipes déjà composées le référencent. */
 function fusion(actuel, personnes) {
-  const parId = new Map(actuel.map((p) => [p.id, p]));
+  const parCle = new Map(actuel.map((p) => [clePersonne(p), p]));
   let ajoutes = 0;
   let majs = 0;
   personnes.forEach((p) => {
-    if (parId.has(p.id)) { parId.set(p.id, { ...parId.get(p.id), ...p }); majs++; }
-    else { parId.set(p.id, p); ajoutes++; }
+    const cle = clePersonne(p);
+    const ancien = parCle.get(cle);
+    if (ancien) { parCle.set(cle, { ...ancien, ...p, id: ancien.id }); majs++; }
+    else { parCle.set(cle, p); ajoutes++; }
   });
-  return { liste: [...parId.values()], ajoutes, majs };
+  return { liste: [...parCle.values()], ajoutes, majs };
 }
+
+/* ------------------------------------------------------------------ */
+/*  Changements entre deux versions de l'effectif                      */
+/* ------------------------------------------------------------------ */
+const CHAMPS_FICHE = ["nom", "prenom", "licence", "naissance"];
+
+function ecartEffectif(avant, apres) {
+  const ancien = new Map(avant.map((p) => [clePersonne(p), p]));
+  const nouveau = new Map(apres.map((p) => [clePersonne(p), p]));
+  const e = { ajoutes: [], retires: [], validees: [], categories: [], corriges: [] };
+  nouveau.forEach((p, cle) => {
+    const a = ancien.get(cle);
+    if (!a) { e.ajoutes.push(p); return; }
+    if (!a.valide && p.valide) e.validees.push(p);
+    if (a.categorie !== p.categorie) e.categories.push({ personne: p, de: a.categorie });
+    if ((a.valide && !p.valide) || CHAMPS_FICHE.some((c) => (a[c] || "") !== (p[c] || "")))
+      e.corriges.push(p);
+  });
+  ancien.forEach((p, cle) => { if (!nouveau.has(cle)) e.retires.push(p); });
+  [e.ajoutes, e.retires, e.validees, e.corriges].forEach((l) => l.sort(parNom));
+  e.categories.sort((x, y) => parNom(x.personne, y.personne));
+  return e;
+}
+
+const ecartVide = (e) =>
+  !e || Object.values(e).every((l) => l.length === 0);
+
+const nomCourt = (p) => `${p.nom} ${p.prenom}`.trim();
+const avecCategorie = (p) => `${nomCourt(p)} (${estDelegue(p) ? "délégué" : p.categorie})`;
+
+function enumere(liste, f, max = 4) {
+  const noms = liste.slice(0, max).map(f);
+  const reste = liste.length - max;
+  if (reste > 0) noms.push(`et ${reste} autre${reste > 1 ? "s" : ""}`);
+  return noms.join(", ");
+}
+
+const nombre = (n, singulier, pluriel) => `${n} ${n > 1 ? pluriel : singulier}`;
+
+/* joueur, délégué, ou personne quand la liste mélange les deux */
+const sujet = (liste) =>
+  liste.every(estDelegue) ? "délégué" : liste.some(estDelegue) ? "personne" : "joueur";
+
+/* Le résumé lu par le délégué : une phrase par sorte de changement. */
+function resumeEcart(e) {
+  if (ecartVide(e)) return [];
+  const lignes = [];
+  const n = (l) => l.length;
+  if (n(e.ajoutes)) {
+    const s = sujet(e.ajoutes);
+    const quoi = s === "personne"
+      ? nombre(n(e.ajoutes), "nouvelle personne", "nouvelles personnes")
+      : nombre(n(e.ajoutes), `nouveau ${s}`, `nouveaux ${s}s`);
+    lignes.push(`${quoi} : ${enumere(e.ajoutes, avecCategorie)}`);
+  }
+  if (n(e.validees))
+    lignes.push(`${nombre(n(e.validees), "licence validée", "licences validées")} : ${enumere(e.validees, nomCourt)}`);
+  if (n(e.categories))
+    lignes.push(`${nombre(n(e.categories), "changement de catégorie", "changements de catégorie")} : ${
+      enumere(e.categories, (c) => `${nomCourt(c.personne)} (${c.de} → ${c.personne.categorie})`)}`);
+  if (n(e.corriges))
+    lignes.push(`${nombre(n(e.corriges), "fiche corrigée", "fiches corrigées")} : ${enumere(e.corriges, nomCourt)}`);
+  if (n(e.retires)) {
+    const s = sujet(e.retires);
+    const quoi = s === "personne"
+      ? nombre(n(e.retires), "personne retirée", "personnes retirées")
+      : nombre(n(e.retires), `${s} retiré`, `${s}s retirés`);
+    lignes.push(`${quoi} : ${enumere(e.retires, nomCourt)}`);
+  }
+  return lignes;
+}
+
+/* « 2026-09-17 » → « 17/09 » */
+const jourMois = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : "");
 
 /* ------------------------------------------------------------------ */
 /*  Feuille de match — mise en page du modèle officiel du District      */
@@ -808,15 +964,40 @@ export default function App() {
   const [pret, setPret] = useState(false);
   const [etatEffectif, setEtatEffectif] = useState("chargement");
   const [codeDemande, setCodeDemande] = useState(false);
+  /* L'effectif tel qu'il a été publié la dernière fois que cet appareil l'a
+     vu : la référence des changements reçus comme de ceux à publier. */
+  const [publie, setPublie] = useState(null);
+  const [nouveautes, setNouveautes] = useState(null);
+  const [publicationOuverte, setPublicationOuverte] = useState(false);
+
+  /* Arrivée d'une version publiée : les retraits sont appliqués, le reste
+     passe par fusion() (les personnes jamais publiées restent). */
+  const recevoir = (personnes, paquet, reference, annoncer) => {
+    const ecart = reference ? ecartEffectif(reference, personnes) : null;
+    const partis = new Set((ecart?.retires || []).map(clePersonne));
+    setEffectif((prev) =>
+      fusion(prev.filter((p) => !partis.has(clePersonne(p))), personnes).liste
+    );
+    setPublie(personnes);
+    if (annoncer && !ecartVide(ecart)) {
+      setNouveautes({ date: paquet.genere || "", lignes: resumeEcart(ecart) });
+    }
+    try {
+      stockage.ecrire(CLE_EMPREINTE, paquet.empreinte || "");
+      stockage.ecrire(CLE_REMPLACEE, "");
+    } catch (e) { /* best effort */ }
+  };
 
   /* Rien n'est embarqué dans le code. L'effectif vient du fichier chiffré
      publié à côté de l'application, et de ce qu'en a gardé le navigateur. */
-  const synchroniser = async (liste) => {
+  const synchroniser = async (liste, reference) => {
     let code = null;
     let empreinte = null;
+    let remplacee = null;
     try {
       code = await stockage.lire(CLE_CODE);
       empreinte = await stockage.lire(CLE_EMPREINTE);
+      remplacee = await stockage.lire(CLE_REMPLACEE);
     } catch (e) { /* stockage indisponible */ }
     if (!code) return liste.length ? "local" : "code_requis";
 
@@ -826,22 +1007,46 @@ export default function App() {
     } catch (e) {
       return liste.length ? "hors_ligne" : "indisponible";
     }
-    if (liste.length && paquet.empreinte && paquet.empreinte === empreinte) return "a_jour";
+    /* Juste après une publication depuis cet appareil, le site sert encore
+       l'ancienne version quelques minutes : on ne revient pas en arrière. */
+    if (remplacee && paquet.empreinte === remplacee) return "publication_en_cours";
+    if (liste.length && reference && paquet.empreinte && paquet.empreinte === empreinte) {
+      if (remplacee) try { stockage.ecrire(CLE_REMPLACEE, ""); } catch (e) { /* best effort */ }
+      return "a_jour";
+    }
 
     try {
       const { personnes } = depuisCSV(await dechiffrerPaquet(paquet, code));
       if (!personnes.length) return "a_jour";
-      setEffectif((prev) => fusion(prev, personnes).liste);
-      try { stockage.ecrire(CLE_EMPREINTE, paquet.empreinte || ""); } catch (e) { /* best effort */ }
-      return liste.length ? "mis_a_jour" : "a_jour";
+      const nouvelle = liste.length > 0 && paquet.empreinte !== empreinte;
+      recevoir(personnes, paquet, reference, nouvelle);
+      return nouvelle ? "mis_a_jour" : "a_jour";
     } catch (e) {
       return "code_perime";
+    }
+  };
+
+  /* Les vérifications en cours de navigation lisent l'état du moment. */
+  const courant = useRef({});
+  courant.current = { effectif, publie };
+  const verification = useRef(false);
+
+  const verifier = async () => {
+    if (verification.current) return;
+    verification.current = true;
+    try {
+      const etat = await synchroniser(courant.current.effectif, courant.current.publie);
+      /* Sans code enregistré il n'y a rien à vérifier : l'état affiché reste. */
+      if (etat !== "local" && etat !== "code_requis") setEtatEffectif(etat);
+    } finally {
+      verification.current = false;
     }
   };
 
   useEffect(() => {
     (async () => {
       let liste = [];
+      let reference = null;
       try {
         const v = await stockage.lire(CLE_EFFECTIF);
         if (v) {
@@ -849,6 +1054,17 @@ export default function App() {
           setEffectif(liste);
         }
       } catch (e) { /* première ouverture, ou stockage indisponible */ }
+      try {
+        const v = await stockage.lire(CLE_PUBLIE);
+        if (v) {
+          reference = JSON.parse(v);
+          setPublie(reference);
+        }
+      } catch (e) { /* pas encore de version publiée connue */ }
+      try {
+        const v = await stockage.lire(CLE_NOUVEAUTES);
+        if (v) setNouveautes(JSON.parse(v));
+      } catch (e) { /* rien à annoncer */ }
       try {
         const v = await stockage.lire(CLE_PLATEAU);
         if (v) {
@@ -873,7 +1089,7 @@ export default function App() {
         setOnglet("plateau");
         setPret(true);
       }
-      const etat = await synchroniser(liste);
+      const etat = await synchroniser(liste, reference);
       setEtatEffectif(etat);
       suivi(`ouverture/${etat}`);
       if (liste.length === 0) setOnglet("plateau");
@@ -881,16 +1097,26 @@ export default function App() {
     })();
   }, []);
 
+  /* Pendant l'utilisation : au retour sur l'application, et régulièrement
+     tant qu'elle est affichée. */
+  useEffect(() => {
+    if (!pret) return undefined;
+    const auRetour = () => { if (document.visibilityState === "visible") verifier(); };
+    const minuterie = setInterval(auRetour, INTERVALLE_VERIFICATION);
+    document.addEventListener("visibilitychange", auRetour);
+    return () => {
+      clearInterval(minuterie);
+      document.removeEventListener("visibilitychange", auRetour);
+    };
+  }, [pret]);
+
   /* Saisie du code : télécharge, déchiffre, mémorise. */
   const ouvrirAvecCode = async (code) => {
     const paquet = await telechargerPaquet();
     const { personnes } = depuisCSV(await dechiffrerPaquet(paquet, code));
     if (!personnes.length) throw new Error("FICHIER_VIDE");
-    setEffectif((prev) => fusion(prev, personnes).liste);
-    try {
-      stockage.ecrire(CLE_CODE, code);
-      stockage.ecrire(CLE_EMPREINTE, paquet.empreinte || "");
-    } catch (e) { /* best effort */ }
+    recevoir(personnes, paquet, publie, false);
+    try { stockage.ecrire(CLE_CODE, code); } catch (e) { /* best effort */ }
     setEtatEffectif("a_jour");
     setCodeDemande(false);
     setOnglet("plateau");
@@ -910,6 +1136,7 @@ export default function App() {
     try {
       stockage.ecrire(CLE_CODE, "");
       stockage.ecrire(CLE_EMPREINTE, "");
+      stockage.ecrire(CLE_REMPLACEE, "");
     } catch (e) { /* best effort */ }
     setEtatEffectif(effectif.length ? "local" : "code_requis");
     setCodeDemande(true);
@@ -921,6 +1148,63 @@ export default function App() {
 
   useEffect(() => { if (pret) enregistre(CLE_EFFECTIF, effectif); }, [effectif, pret]);
   useEffect(() => { if (pret) enregistre(CLE_PLATEAU, { plateau, equipes }); }, [plateau, equipes, pret]);
+  useEffect(() => { if (pret && publie) enregistre(CLE_PUBLIE, publie); }, [publie, pret]);
+  useEffect(() => { if (pret) enregistre(CLE_NOUVEAUTES, nouveautes); }, [nouveautes, pret]);
+
+  /* Une personne retirée de l'effectif (à la main ou par une mise à jour)
+     ne reste pas dans une équipe. */
+  useEffect(() => {
+    if (!pret || !effectif.length) return;
+    const ids = new Set(effectif.map((p) => p.id));
+    setEquipes((prev) => {
+      const orphelin = prev.some((e) =>
+        e.joueurs.some((i) => !ids.has(i)) || (e.delegueId && !ids.has(e.delegueId)));
+      if (!orphelin) return prev;
+      return prev.map((e) => ({
+        ...e,
+        joueurs: e.joueurs.filter((i) => ids.has(i)),
+        delegueId: ids.has(e.delegueId) ? e.delegueId : null,
+      }));
+    });
+  }, [effectif, pret]);
+
+  /* Ce qui a changé sur cet appareil depuis la dernière version publiée. */
+  const aPublier = useMemo(
+    () => (publie ? ecartEffectif(publie, effectif) : null),
+    [publie, effectif]
+  );
+  const modificationsEnAttente = publie
+    ? !ecartVide(aPublier)
+    : ["local", "colle"].includes(etatEffectif) && effectif.length > 0;
+
+  /* Chiffre l'effectif avec le code de l'effectif et le confie au relais.
+     En cas d'échec rien ne change sur l'appareil. */
+  const publier = async (codeSaisi) => {
+    let code = codeSaisi;
+    try {
+      if (!code) code = await stockage.lire(CLE_CODE);
+    } catch (e) { /* stockage indisponible */ }
+    if (!code) throw new Error("CODE_MANQUANT");
+    /* La version en ligne au moment de publier : tant que le site la sert
+       encore, synchroniser() ne la réapplique pas. */
+    let remplacee = "";
+    try {
+      remplacee = (await telechargerPaquet()).empreinte || "";
+    } catch (e) {
+      try { remplacee = (await stockage.lire(CLE_EMPREINTE)) || ""; } catch (e2) { /* best effort */ }
+    }
+    const liste = effectif;
+    const paquet = await chiffrerPaquet(versCSV(liste), code);
+    await envoyerPaquet(paquet, await jetonPublication(code));
+    try {
+      stockage.ecrire(CLE_CODE, code);
+      stockage.ecrire(CLE_EMPREINTE, paquet.empreinte);
+      stockage.ecrire(CLE_REMPLACEE, remplacee);
+    } catch (e) { /* best effort */ }
+    setPublie(liste);
+    setEtatEffectif("publication_en_cours");
+    suivi("effectif/publie");
+  };
 
   const personneDe = (id) => effectif.find((p) => p.id === id);
 
@@ -963,6 +1247,21 @@ export default function App() {
     setEquipes([e]);
     setEquipeActive(e.id);
     setOnglet("plateau");
+  };
+
+  /* Une fiche corrigée garde sa place dans les équipes, même si son
+     identifiant change avec le numéro de licence. */
+  const modifierPersonne = (id, fiche) => {
+    const nouvelId = idPersonne(fiche.licence, fiche.nom, fiche.prenom);
+    setEffectif((prev) => prev.map((p) => (p.id === id ? { ...fiche, id: nouvelId } : p)));
+    if (nouvelId === id) return;
+    setEquipes((prev) =>
+      prev.map((e) => ({
+        ...e,
+        joueurs: e.joueurs.map((i) => (i === id ? nouvelId : i)),
+        delegueId: e.delegueId === id ? nouvelId : e.delegueId,
+      }))
+    );
   };
 
   /* Retirer quelqu'un de l'effectif le retire aussi des équipes. */
@@ -1034,11 +1333,27 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5">
+        {nouveautes && (
+          <BandeauNouveautes nouveautes={nouveautes} fermer={() => setNouveautes(null)} />
+        )}
         <BandeauEffectif
           etat={etatEffectif}
           action={etatEffectif === "code_perime" ? () => setCodeDemande(true) : null}
           libelleAction="Saisir le code"
         />
+        {modificationsEnAttente && onglet !== "effectif" && (
+          <div className="rounded-lg border px-3 py-2.5 mb-4 text-sm flex items-start gap-2"
+            style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+            <Upload size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
+            <span className="flex-1">
+              Vos modifications de l'effectif ne sont pas encore publiées.
+            </span>
+            <button onClick={() => { setOnglet("effectif"); setPublicationOuverte(true); }}
+              className="shrink-0 font-medium" style={{ color: C.terrain }}>
+              Publier
+            </button>
+          </div>
+        )}
         {onglet === "plateau" && (
           <VuePlateau plateau={plateau} setPlateau={setPlateau} effectif={effectif}
             allerEffectif={() => setOnglet("effectif")} />
@@ -1068,6 +1383,12 @@ export default function App() {
             setEffectif={setEffectif}
             affectation={affectation}
             retirer={retirerDeLEffectif}
+            modifier={modifierPersonne}
+            aPublier={aPublier}
+            modificationsEnAttente={modificationsEnAttente}
+            publier={publier}
+            publicationOuverte={publicationOuverte}
+            setPublicationOuverte={setPublicationOuverte}
             etat={etatEffectif}
             demanderCode={() => setCodeDemande(true)}
             oublierCode={oublierCode}
@@ -1110,17 +1431,20 @@ const ERREURS_CODE = {
   CONTEXTE_NON_SUR: "Le déchiffrement demande une adresse en https.",
 };
 
+/* La mise à jour reçue est annoncée par BandeauNouveautes, avec son détail. */
 const MESSAGES_EFFECTIF = {
   hors_ligne: "Pas de réseau : l'effectif enregistré sur cet appareil est utilisé.",
-  mis_a_jour: "L'effectif publié a changé, il vient d'être mis à jour.",
   code_perime: "L'effectif a été republié avec un autre code.",
   indisponible: "L'effectif publié est injoignable pour l'instant.",
 };
 
+const ETATS_AVEC_CODE = ["a_jour", "mis_a_jour", "hors_ligne", "code_perime", "publication_en_cours"];
+
 const SOURCE_EFFECTIF = {
   chargement: "Vérification de l'effectif publié…",
   a_jour: "Effectif publié, à jour.",
-  mis_a_jour: "Effectif publié, mis à jour à l'ouverture.",
+  mis_a_jour: "Effectif publié, mis à jour.",
+  publication_en_cours: "Effectif publié depuis cet appareil, visible par tous d'ici quelques minutes.",
   hors_ligne: "Effectif enregistré sur cet appareil, pas de réseau pour vérifier.",
   code_perime: "Le code enregistré n'ouvre plus l'effectif publié.",
   indisponible: "Effectif publié injoignable.",
@@ -1149,6 +1473,36 @@ function BandeauEffectif({ etat, action, libelleAction }) {
         </button>
       )}
     </div>
+  );
+}
+
+/* Une nouvelle version de l'effectif est arrivée : sa date et ce qui a
+   changé, en clair. Reste affiché jusqu'à ce que le délégué le ferme. */
+function BandeauNouveautes({ nouveautes, fermer }) {
+  return (
+    <div className="rounded-lg border px-3 py-2.5 mb-4 text-sm flex items-start gap-2"
+      style={{ borderColor: C.terrain, background: C.terrainSoft }}>
+      <Check size={14} className="mt-0.5 shrink-0" style={{ color: C.terrain }} />
+      <div className="flex-1 min-w-0">
+        <p className="font-medium">
+          Effectif mis à jour{nouveautes.date ? ` le ${jourMois(nouveautes.date)}` : ""}
+        </p>
+        <ul className="mt-1 space-y-0.5">
+          {nouveautes.lignes.map((l, i) => <li key={i}>{l}</li>)}
+        </ul>
+      </div>
+      <button onClick={fermer} aria-label="Fermer" className="shrink-0"><X size={14} /></button>
+    </div>
+  );
+}
+
+/* Repérable d'un coup d'œil, dans l'effectif comme dans les équipes. */
+function BadgeLicence() {
+  return (
+    <span className="text-xs shrink-0 px-2 py-0.5 rounded-full font-medium flex items-center gap-1"
+      style={{ background: "#F6E2DD", color: C.alerte }}>
+      <AlertTriangle size={11} /> Licence non validée
+    </span>
   );
 }
 
@@ -1474,6 +1828,7 @@ function VueEquipes({
                 {delegues.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.nom} {d.prenom}{d.licence ? ` — ${d.licence}` : ""}
+                    {d.valide ? "" : " (licence non validée)"}
                   </option>
                 ))}
               </select>
@@ -1580,9 +1935,7 @@ function VueEquipes({
                             {j.licence}{j.naissance ? ` · né le ${j.naissance}` : ""}
                           </span>
                         </span>
-                        {!j.valide && (
-                          <span className="text-xs shrink-0" style={{ color: C.alerte }}>non validée</span>
-                        )}
+                        {!j.valide && <BadgeLicence />}
                         {bloque && <span className="text-xs shrink-0" style={{ color: C.ink70 }}>{dans.nom}</span>}
                       </button>
                     </li>
@@ -1628,15 +1981,46 @@ function JaugeEquipe({ n }) {
 /*  Vue Effectif — import / export CSV                                 */
 /* ------------------------------------------------------------------ */
 function VueEffectif({
-  effectif, setEffectif, affectation, retirer, etat, demanderCode, oublierCode,
+  effectif, setEffectif, affectation, retirer, modifier, aPublier, modificationsEnAttente,
+  publier, publicationOuverte, setPublicationOuverte, etat, demanderCode, oublierCode,
 }) {
   const fichier = useRef(null);
   const [message, setMessage] = useState(null);
   const [replis, setReplis] = useState(null);
   const [exempleOuvert, setExempleOuvert] = useState(false);
   const [ajout, setAjout] = useState(null);
+  const [edition, setEdition] = useState(null);
+  const [erreurFiche, setErreurFiche] = useState(null);
   const [collageOuvert, setCollageOuvert] = useState(false);
   const [texteColle, setTexteColle] = useState("");
+
+  /* Une fiche saisie à la main : même mise en forme que l'import, et pas deux
+     personnes avec le même numéro de licence. */
+  const ficheValide = (valeur, idActuel) => {
+    const fiche = {
+      ...valeur,
+      nom: (valeur.nom || "").trim().toUpperCase(),
+      prenom: (valeur.prenom || "").trim(),
+      licence: (valeur.licence || "").replace(/\s/g, ""),
+      naissance: (valeur.naissance || "").trim(),
+    };
+    if (!fiche.nom) { setErreurFiche("Le nom est obligatoire."); return null; }
+    const cle = clePersonne(fiche);
+    if (effectif.some((p) => p.id !== idActuel && clePersonne(p) === cle)) {
+      setErreurFiche(fiche.licence
+        ? "Une autre personne porte déjà ce numéro de licence."
+        : "Cette personne est déjà dans l'effectif.");
+      return null;
+    }
+    setErreurFiche(null);
+    return fiche;
+  };
+
+  const ouvrirFiche = (p) => {
+    setAjout(null);
+    setErreurFiche(null);
+    setEdition({ id: p.id, valeur: { ...p } });
+  };
 
   const exporter = () => {
     const csv = versCSV(effectif);
@@ -1723,20 +2107,35 @@ function VueEffectif({
         </div>
       </div>
       <p className="text-sm mb-3" style={{ color: C.ink70 }}>
-        Joueurs et délégués restent dans ce navigateur. Ils ne sont envoyés nulle part.
+        Touchez une ligne pour la corriger. Vos changements restent sur ce téléphone
+        jusqu'à ce que vous les publiiez pour les autres.
       </p>
 
       <div className="rounded-lg border px-3 py-2.5 mb-4 flex items-center justify-between gap-3 text-xs"
         style={{ background: C.papier, borderColor: C.ligne }}>
         <span style={{ color: C.ink70 }}>{SOURCE_EFFECTIF[etat] || "Effectif local."}</span>
         <button
-          onClick={["a_jour", "mis_a_jour", "hors_ligne", "code_perime"].includes(etat) ? oublierCode : demanderCode}
+          onClick={ETATS_AVEC_CODE.includes(etat) ? oublierCode : demanderCode}
           className="shrink-0 font-medium" style={{ color: C.terrain }}>
-          {["a_jour", "mis_a_jour", "hors_ligne", "code_perime"].includes(etat)
-            ? "Changer le code"
-            : "Saisir le code"}
+          {ETATS_AVEC_CODE.includes(etat) ? "Changer le code" : "Saisir le code"}
         </button>
       </div>
+
+      {(modificationsEnAttente || publicationOuverte) && (
+        <Publication
+          aPublier={aPublier}
+          total={effectif.length}
+          codeConnu={ETATS_AVEC_CODE.includes(etat) && etat !== "code_perime"}
+          ouverte={publicationOuverte}
+          ouvrir={() => setPublicationOuverte(true)}
+          fermer={() => setPublicationOuverte(false)}
+          publier={publier}
+          reussite={() => {
+            setPublicationOuverte(false);
+            setMessage({ ton: "ok", texte: "Effectif publié, il sera visible par tous d'ici quelques minutes." });
+          }}
+        />
+      )}
 
       {message && (
         <div className="rounded-lg border p-3 mb-4 text-sm flex items-start gap-2"
@@ -1782,7 +2181,11 @@ function VueEffectif({
           U8 {compte("U8")} · U9 {compte("U9")} · délégués {compte(DELEGUE)}
         </span>
         <div className="flex gap-3">
-          <button onClick={() => setAjout({ nom: "", prenom: "", categorie: "U8", licence: "", naissance: "", valide: true })}
+          <button onClick={() => {
+            setEdition(null);
+            setErreurFiche(null);
+            setAjout({ nom: "", prenom: "", categorie: "U8", licence: "", naissance: "", valide: true });
+          }}
             className="flex items-center gap-1" style={{ color: C.terrain }}>
             <Plus size={14} /> Ajouter
           </button>
@@ -1823,17 +2226,15 @@ function VueEffectif({
         <FormulairePersonne
           valeur={ajout}
           setValeur={setAjout}
+          erreur={erreurFiche}
+          libelle="Ajouter"
           annuler={() => setAjout(null)}
           valider={() => {
-            if (!ajout.nom.trim()) return;
+            const fiche = ficheValide(ajout, null);
+            if (!fiche) return;
             setEffectif((prev) => [
               ...prev,
-              {
-                ...ajout,
-                nom: ajout.nom.trim().toUpperCase(),
-                prenom: ajout.prenom.trim(),
-                id: ajout.licence.trim() || `m${Date.now()}`,
-              },
+              { ...fiche, id: idPersonne(fiche.licence, fiche.nom, fiche.prenom) },
             ]);
             setAjout(null);
           }}
@@ -1848,35 +2249,143 @@ function VueEffectif({
         </div>
       ) : (
         <ul className="space-y-1.5">
-          {liste.map((p) => (
+          {liste.map((p) => (edition?.id === p.id ? (
+            <li key={p.id}>
+              <FormulairePersonne
+                valeur={edition.valeur}
+                setValeur={(valeur) => setEdition({ ...edition, valeur })}
+                erreur={erreurFiche}
+                libelle="Enregistrer"
+                annuler={() => setEdition(null)}
+                valider={() => {
+                  const fiche = ficheValide(edition.valeur, p.id);
+                  if (!fiche) return;
+                  modifier(p.id, fiche);
+                  setEdition(null);
+                }}
+              />
+            </li>
+          ) : (
             <li key={p.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border"
               style={{ background: C.papier, borderColor: C.ligne }}>
-              <span className="text-xs w-12 shrink-0"
-                style={{ color: estDelegue(p) ? C.brassard : C.terrain }}>
-                {estDelegue(p) ? "Dél." : p.categorie}
-              </span>
-              <span className="flex-1 min-w-0">
-                <span className="block text-sm truncate">
-                  <span className="font-medium">{p.nom}</span> {p.prenom}
+              <button onClick={() => ouvrirFiche(p)} aria-label={`Corriger ${nomCourt(p)}`}
+                className="flex-1 min-w-0 flex items-center gap-3 text-left">
+                <span className="text-xs w-12 shrink-0"
+                  style={{ color: estDelegue(p) ? C.brassard : C.terrain }}>
+                  {estDelegue(p) ? "Dél." : p.categorie}
                 </span>
-                <span className="block text-xs" style={{ color: C.ink70 }}>
-                  {p.licence}{p.naissance ? ` · ${p.naissance}` : ""}
-                  {affectation[p.id] ? ` · ${affectation[p.id].nom}` : ""}
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm truncate">
+                    <span className="font-medium">{p.nom}</span> {p.prenom}
+                  </span>
+                  <span className="block text-xs" style={{ color: C.ink70 }}>
+                    {p.licence}{p.naissance ? ` · ${p.naissance}` : ""}
+                    {affectation[p.id] ? ` · ${affectation[p.id].nom}` : ""}
+                  </span>
                 </span>
-              </span>
-              {!p.valide && <span className="text-xs" style={{ color: C.alerte }}>non validée</span>}
+                {!p.valide && <BadgeLicence />}
+              </button>
               <button onClick={() => retirer(p.id)} aria-label="Retirer" style={{ color: C.ink70 }}>
                 <Trash2 size={14} />
               </button>
             </li>
-          ))}
+          )))}
         </ul>
       )}
     </section>
   );
 }
 
-function FormulairePersonne({ valeur, setValeur, valider, annuler }) {
+const ERREURS_PUBLICATION = {
+  CODE_MANQUANT: "Saisissez le code de l'effectif pour publier.",
+  CODE_REFUSE: "Ce code ne permet pas de publier l'effectif. Vérifiez la saisie.",
+  RESEAU: "Pas de réseau : rien n'a été publié. Vos modifications restent sur ce téléphone, réessayez plus tard.",
+  PUBLICATION_INACTIVE: "La publication n'est pas encore activée. Vos modifications restent sur ce téléphone.",
+  CONTEXTE_NON_SUR: "La publication demande une adresse en https.",
+};
+
+/* « Publier » : le récapitulatif de ce qui va changer, puis une
+   confirmation. Aucune notion de fichier ni de chiffrement ici. */
+function Publication({ aPublier, total, codeConnu, ouverte, ouvrir, fermer, publier, reussite }) {
+  const [code, setCode] = useState("");
+  const [enCours, setEnCours] = useState(false);
+  const [erreur, setErreur] = useState(null);
+  const lignes = resumeEcart(aPublier);
+
+  const confirmer = async () => {
+    if (enCours) return;
+    setEnCours(true);
+    setErreur(null);
+    try {
+      await publier(code.trim() || null);
+      setCode("");
+      reussite();
+    } catch (e) {
+      setErreur(ERREURS_PUBLICATION[e.message] ||
+        "La publication a échoué. Vos modifications restent sur ce téléphone, réessayez dans un instant.");
+    } finally {
+      setEnCours(false);
+    }
+  };
+
+  const bloque = enCours || (!codeConnu && !code.trim());
+
+  return (
+    <div className="rounded-lg border p-3 mb-4 text-sm"
+      style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+      <p className="font-medium mb-1">
+        {ouverte ? "Publier ces changements pour tout le monde ?" : "Changements pas encore publiés"}
+      </p>
+      {lignes.length ? (
+        <ul className="space-y-0.5 mb-3">
+          {lignes.map((l, i) => <li key={i}>{l}</li>)}
+        </ul>
+      ) : (
+        <p className="mb-3">
+          L'effectif de ce téléphone ({total} personne{total > 1 ? "s" : ""}) deviendra
+          l'effectif de tout le monde.
+        </p>
+      )}
+
+      {!ouverte ? (
+        <button onClick={ouvrir}
+          className="px-4 py-2 rounded-md text-sm font-medium flex items-center gap-1.5"
+          style={{ background: C.terrain, color: "#fff" }}>
+          <Upload size={14} /> Publier
+        </button>
+      ) : (
+        <>
+          {!codeConnu && (
+            <input type="password" value={code} onChange={(e) => setCode(e.target.value)}
+              placeholder="Code de l'effectif" aria-label="Code de l'effectif"
+              autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              className="w-full border rounded-md px-3 py-2 text-base mb-2" style={styleInput} />
+          )}
+          <div className="flex gap-2">
+            <button onClick={confirmer} disabled={bloque}
+              className="px-4 py-2 rounded-md text-sm font-medium"
+              style={{ background: C.terrain, color: "#fff", opacity: bloque ? 0.45 : 1 }}>
+              {enCours ? "Publication…" : "Confirmer"}
+            </button>
+            <button onClick={() => { setErreur(null); fermer(); }} disabled={enCours}
+              className="px-4 py-2 rounded-md border text-sm"
+              style={{ borderColor: C.ligne, color: C.ink70, background: C.papier }}>
+              Annuler
+            </button>
+          </div>
+        </>
+      )}
+
+      {erreur && (
+        <p className="mt-2 flex items-start gap-2" style={{ color: C.alerte }}>
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {erreur}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erreur }) {
   const maj = (k) => (e) => setValeur({ ...valeur, [k]: e.target.value });
   const delegue = valeur.categorie === DELEGUE;
   return (
@@ -1903,9 +2412,10 @@ function FormulairePersonne({ valeur, setValeur, valider, annuler }) {
           Licence validée
         </label>
       </div>
+      {erreur && <p className="text-xs mb-2" style={{ color: C.alerte }}>{erreur}</p>}
       <div className="flex gap-2">
         <button onClick={valider} className="px-3 py-2 rounded-md text-sm"
-          style={{ background: C.terrain, color: "#fff" }}>Ajouter</button>
+          style={{ background: C.terrain, color: "#fff" }}>{libelle}</button>
         <button onClick={annuler} className="px-3 py-2 rounded-md border text-sm"
           style={{ borderColor: C.ligne, color: C.ink70 }}>Annuler</button>
       </div>
