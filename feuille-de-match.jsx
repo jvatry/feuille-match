@@ -1474,7 +1474,7 @@ export default function App() {
       <header className="px-4 py-4 border-b" style={{ borderColor: C.ligne, background: C.papier }}>
         <div className="max-w-3xl mx-auto flex items-baseline justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Feuilles de plateau</h1>
+            <h1 className="text-lg font-semibold tracking-tight">Gestion des plateaux</h1>
             <p className="text-xs" style={{ color: C.ink70 }}>
               {CLUB.nom} · {CLUB.numero}
             </p>
@@ -1722,7 +1722,7 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
   return (
     <div className="min-h-screen" style={{ background: C.craie, color: C.ink }}>
       <div className="max-w-md mx-auto px-5 py-12">
-        <h1 className="text-lg font-semibold tracking-tight">Feuilles de plateau</h1>
+        <h1 className="text-lg font-semibold tracking-tight">Gestion des plateaux</h1>
         <p className="text-xs mb-8" style={{ color: C.ink70 }}>
           {CLUB.nom} · {CLUB.numero}
         </p>
