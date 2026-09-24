@@ -8,17 +8,24 @@ import {
 /* ------------------------------------------------------------------ */
 /*  Tokens                                                             */
 /* ------------------------------------------------------------------ */
+/* Charte du F.C. Hettange-Grande : bleu et blanc. `terrain` porte le bleu
+   du club (actions, sélections, titres) ; l'orange et le rouge restent
+   réservés aux alertes, pour ne pas les confondre avec une action. */
 const C = {
-  ink: "#12211C",
-  ink70: "#12211Cb3",
-  terrain: "#1F6B4A",
-  terrainSoft: "#E3EFE8",
-  craie: "#F4F6F3",
-  ligne: "#D6DED8",
+  ink: "#14213D",
+  ink70: "#14213Db3",
+  terrain: "#1848A8",       // bleu du club, relevé sur le logo
+  terrainSoft: "#E6EDF8",
+  craie: "#F4F6FA",
+  ligne: "#D5DCE8",
   brassard: "#E8A317",
+  brassardSoft: "#FBF3E2",
   alerte: "#A8321C",
+  alerteSoft: "#F6E2DD",
   papier: "#FFFFFF",
 };
+
+const LOGO = "./logo-fchg.png";
 
 const CLUB = { nom: "F.C. Hettange Grande", numero: "527314" };
 
@@ -1492,12 +1499,17 @@ export default function App() {
       `}</style>
 
       <header className="px-4 py-4 border-b" style={{ borderColor: C.ligne, background: C.papier }}>
-        <div className="max-w-3xl mx-auto flex items-baseline justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Gestion des plateaux</h1>
-            <p className="text-xs" style={{ color: C.ink70 }}>
-              {CLUB.nom} · {CLUB.numero}
-            </p>
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <img src={LOGO} alt="" className="h-11 w-auto shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>
+                Gestion des plateaux
+              </h1>
+              <p className="text-xs" style={{ color: C.ink70 }}>
+                {CLUB.nom} · {CLUB.numero}
+              </p>
+            </div>
           </div>
           <button onClick={() => setViderDemande(true)}
             className="text-xs px-3 py-2 rounded-md border flex items-center gap-1.5"
@@ -1507,7 +1519,7 @@ export default function App() {
         </div>
         {viderDemande && (
           <div className="max-w-3xl mx-auto mt-3 rounded-lg border p-3 text-sm"
-            style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+            style={{ borderColor: C.brassard, background: C.brassardSoft }}>
             <p className="font-medium">
               {feuilles.length > 1 ? `Vider les ${feuilles.length} plateaux ?` : "Vider le plateau ?"}
             </p>
@@ -1541,7 +1553,7 @@ export default function App() {
         />
         {modificationsEnAttente && onglet !== "effectif" && (
           <div className="rounded-lg border px-3 py-2.5 mb-4 text-sm flex items-start gap-2"
-            style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+            style={{ borderColor: C.brassard, background: C.brassardSoft }}>
             <Upload size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
             <span className="flex-1">
               Vos modifications de l'effectif ne sont pas encore publiées.
@@ -1682,7 +1694,7 @@ function BandeauEffectif({ etat, action, libelleAction }) {
     <div className="rounded-lg border px-3 py-2.5 mb-4 text-sm flex items-start gap-2"
       style={{
         borderColor: doux ? C.terrain : C.brassard,
-        background: doux ? C.terrainSoft : "#FBF3E2",
+        background: doux ? C.terrainSoft : C.brassardSoft,
       }}>
       {doux
         ? <Check size={14} className="mt-0.5 shrink-0" style={{ color: C.terrain }} />
@@ -1721,7 +1733,7 @@ function BandeauNouveautes({ nouveautes, fermer }) {
 function BadgeLicence() {
   return (
     <span className="text-xs shrink-0 px-2 py-0.5 rounded-full font-medium flex items-center gap-1"
-      style={{ background: "#F6E2DD", color: C.alerte }}>
+      style={{ background: C.alerteSoft, color: C.alerte }}>
       <AlertTriangle size={11} /> Licence non validée
     </span>
   );
@@ -1761,7 +1773,10 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
   return (
     <div className="min-h-screen" style={{ background: C.craie, color: C.ink }}>
       <div className="max-w-md mx-auto px-5 py-12">
-        <h1 className="text-lg font-semibold tracking-tight">Gestion des plateaux</h1>
+        <img src={LOGO} alt={`Logo du ${CLUB.nom}`} className="h-24 w-auto mb-4" />
+        <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>
+          Gestion des plateaux
+        </h1>
         <p className="text-xs mb-8" style={{ color: C.ink70 }}>
           {CLUB.nom} · {CLUB.numero}
         </p>
@@ -1801,7 +1816,7 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
 
         {erreur && (
           <div className="rounded-lg border p-3 mt-4 text-sm flex items-start gap-2"
-            style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+            style={{ borderColor: C.brassard, background: C.brassardSoft }}>
             <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
             <span className="flex-1">{erreur}</span>
           </div>
@@ -2033,7 +2048,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
 
       {effectif.length === 0 && (
         <div className="rounded-lg border p-3 mb-5 text-sm"
-          style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+          style={{ borderColor: C.brassard, background: C.brassardSoft }}>
           L'effectif est vide.{" "}
           <button onClick={allerEffectif} className="underline" style={{ color: C.terrain }}>
             Importez le fichier CSV
@@ -2094,7 +2109,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
             </button>
           ) : (
             <div className="rounded-lg border p-3 text-sm"
-              style={{ borderColor: C.alerte, background: "#F6E2DD" }}>
+              style={{ borderColor: C.alerte, background: C.alerteSoft }}>
               <p className="font-medium mb-2">Supprimer le plateau {plateau.niveau} et ses équipes ?</p>
               <div className="flex gap-2">
                 <button onClick={supprimer} className="px-3 py-1.5 rounded-md text-sm"
@@ -2586,7 +2601,7 @@ function VueEffectif({
         <div className="rounded-lg border p-3 mb-4 text-sm flex items-start gap-2"
           style={{
             borderColor: message.ton === "ok" ? C.terrain : C.brassard,
-            background: message.ton === "ok" ? C.terrainSoft : "#FBF3E2",
+            background: message.ton === "ok" ? C.terrainSoft : C.brassardSoft,
           }}>
           {message.ton === "ok"
             ? <Check size={14} className="mt-0.5 shrink-0" style={{ color: C.terrain }} />
@@ -2777,7 +2792,7 @@ function Publication({ aPublier, total, codeConnu, ouverte, ouvrir, fermer, publ
 
   return (
     <div className="rounded-lg border p-3 mb-4 text-sm"
-      style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+      style={{ borderColor: C.brassard, background: C.brassardSoft }}>
       <p className="font-medium mb-1">
         {ouverte ? "Publier ces changements pour tout le monde ?" : "Changements pas encore publiés"}
       </p>
@@ -2933,7 +2948,8 @@ function modeleConvocation(feuilles, personneDe, tenue) {
 
 const COULEURS_CONVOCATION = {
   fond: "#111111",
-  bleu: "#6E9BD3",
+  bleu: "#8BA3D3",          // bleu du club éclairci de moitié : texte noir lisible
+  club: "#1848A8",
   blanc: "#FFFFFF",
   encre: "#111111",
   rouge: "#FF2A1A",
@@ -2944,7 +2960,7 @@ const COULEURS_CONVOCATION = {
 
 /* Dessine l'image dans `toile` (un <canvas>), à la manière du tableau fait
    jusqu'ici à la main : cases séparées par un épais quadrillage noir. */
-function dessinerConvocation(toile, m) {
+function dessinerConvocation(toile, m, logo = null) {
   const K = COULEURS_CONVOCATION;
   const L_LIBELLE = 300;
   const L_COLONNE = 250;
@@ -2974,6 +2990,7 @@ function dessinerConvocation(toile, m) {
     coupe(p.adresse, 30, p.equipes.length * L_COLONNE - 40).length));
   const lignesTenue = coupe(m.tenue, 30, colonnes * L_COLONNE - 40).length;
   const rangees = [
+    { cle: "entete", h: 130 },
     { cle: "date", h: 70 },
     { cle: "equipes", h: 70 },
     { cle: "lieu", h: 72 },
@@ -3073,6 +3090,24 @@ function dessinerConvocation(toile, m) {
   rangees.forEach((r) => {
     const { h } = r;
     switch (r.cle) {
+      case "entete": {
+        /* Bandeau du club : le logo, le nom du club en bleu. */
+        caseTexte(0, y, L_LIBELLE + toute, h, K.blanc, "");
+        let xTexte = JOINT + 24;
+        if (logo) {
+          const hl = h - JOINT - 20;
+          const ll = (hl * logo.width) / logo.height;
+          ctx.drawImage(logo, JOINT + 24, y + JOINT + 10, ll, hl);
+          xTexte += ll + 24;
+        }
+        const milieu = xTexte + (L_LIBELLE + toute - xTexte) / 2;
+        ctx.fillStyle = K.club;
+        ctx.font = police(44);
+        ctx.fillText(CLUB.nom.toUpperCase(), milieu, y + JOINT + (h - JOINT) * 0.38);
+        ctx.font = police(30);
+        ctx.fillText("CONVOCATION", milieu, y + JOINT + (h - JOINT) * 0.74);
+        break;
+      }
       case "date":
         caseTexte(0, y, L_LIBELLE, h, K.bleu, "DATE");
         caseTexte(L_LIBELLE, y, toute, h, K.blanc, m.date);
@@ -3123,6 +3158,15 @@ function dessinerConvocation(toile, m) {
 function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
   const [image, setImage] = useState(null);
   const [message, setMessage] = useState(null);
+  const [logo, setLogo] = useState(null);
+
+  /* Le logo du club, pour le bandeau de l'image ; sans lui, l'image se
+     fait quand même. */
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => setLogo(img);
+    img.src = LOGO;
+  }, []);
 
   const modele = useMemo(
     () => modeleConvocation(feuilles, personneDe, tenue),
@@ -3137,14 +3181,14 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
     try {
       const toile = document.createElement("canvas");
       if (!toile.getContext("2d")) throw new Error("CANVAS");
-      dessinerConvocation(toile, modele);
+      dessinerConvocation(toile, modele, logo);
       const apercu = toile.toDataURL("image/png");
       toile.toBlob((blob) => { if (!annule) setImage({ apercu, blob }); }, "image/png");
     } catch (e) {
       setImage(false);
     }
     return () => { annule = true; };
-  }, [modele]);
+  }, [modele, logo]);
 
   const nomFichier = `convocation-${feuilles[0]?.plateau.date || "samedi"}.png`;
 
@@ -3211,7 +3255,7 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
 
       {problemes.length > 0 && (
         <ul className="rounded-lg border p-3 mb-4 text-sm space-y-1"
-          style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+          style={{ borderColor: C.brassard, background: C.brassardSoft }}>
           {problemes.map((p, i) => (
             <li key={i} className="flex gap-2">
               <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
@@ -3314,7 +3358,7 @@ function VueFeuille({ plateau, equipes, personneDe }) {
 
       {problemes.length > 0 && (
         <ul className="rounded-lg border p-3 mb-4 text-sm space-y-1"
-          style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+          style={{ borderColor: C.brassard, background: C.brassardSoft }}>
           {problemes.map((p, i) => (
             <li key={i} className="flex gap-2">
               <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
