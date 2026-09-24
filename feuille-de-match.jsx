@@ -1878,29 +1878,53 @@ function SelecteurHeure({ valeur, changer }) {
     opacity: desactive ? 0.35 : 1,
   });
 
+  /* Les heures : des boutons séparés. Les minutes : une barre segmentée,
+     « :15 ». Au-dessus, l'heure choisie telle qu'elle sera imprimée. */
+  const libelle = "w-16 shrink-0 text-xs";
   return (
-    <div>
-      <div className="grid grid-cols-5 gap-1.5 mb-2">
-        {heures.map((hh) => (
-          <button key={hh} aria-pressed={heure === hh}
-            onClick={() => changer(vers(hh, QUARTS.includes(m) && permis(hh, m) ? m : "00"))}
-            className="py-2 rounded-md border text-sm" style={pastille(heure === hh)}>
-            {hh} h
-          </button>
-        ))}
-      </div>
-      <div className="grid grid-cols-4 gap-1.5">
-        {QUARTS.map((mm) => {
-          const desactive = heure === null || !permis(heure, mm);
-          return (
-            <button key={mm} disabled={desactive} aria-pressed={heure !== null && m === mm}
-              onClick={() => changer(vers(heure, mm))}
-              className="py-2 rounded-md border text-sm"
-              style={pastille(heure !== null && m === mm, desactive)}>
-              {mm}
+    <div className="rounded-lg border p-3" style={{ borderColor: C.ligne, background: C.papier }}>
+      <p className="text-2xl font-semibold mb-3 tabular-nums"
+        style={{ color: valeur ? C.terrain : C.ink70 }}>
+        {valeur ? heureRdv(valeur) : "— H —"}
+      </p>
+      <div className="flex items-center gap-2 mb-3">
+        <span className={libelle} style={{ color: C.ink70 }}>Heure</span>
+        <div className="flex-1 grid grid-cols-5 gap-1.5">
+          {heures.map((hh) => (
+            <button key={hh} aria-pressed={heure === hh}
+              onClick={() => changer(vers(hh, QUARTS.includes(m) && permis(hh, m) ? m : "00"))}
+              className="py-2 rounded-md border text-sm" style={pastille(heure === hh)}>
+              {hh} h
             </button>
-          );
-        })}
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className={libelle} style={{ color: C.ink70 }}>Minutes</span>
+        <div className="flex-1 grid grid-cols-4 rounded-full border overflow-hidden"
+          style={{ borderColor: C.terrain }}>
+          {QUARTS.map((mm, i) => {
+            const desactive = heure === null || !permis(heure, mm);
+            const actif = heure !== null && m === mm;
+            return (
+              <button key={mm} disabled={desactive} aria-pressed={actif}
+                aria-label={`${mm} minutes`}
+                onClick={() => changer(vers(heure, mm))}
+                className="py-2 text-sm"
+                style={{
+                  background: actif ? C.terrain : C.papier,
+                  color: actif ? "#fff" : C.ink,
+                  fontWeight: actif ? 600 : 400,
+                  opacity: desactive ? 0.35 : 1,
+                  borderLeftWidth: i ? 1 : 0,
+                  borderLeftStyle: "solid",
+                  borderLeftColor: C.terrain,
+                }}>
+                :{mm}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -2854,9 +2878,9 @@ const ABREVIATION_NIVEAU = { "Niveau 2": "N2" };
 /* « 2026-09-26 » → « 26/09/26 » */
 const dateCourte = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
 
-/* Rendez-vous au quart d'heure, de 8 h à 17 h. */
+/* Rendez-vous au quart d'heure, de 8 h à 12 h. */
 const HEURE_RDV_MIN = 8;
-const HEURE_RDV_MAX = 17;
+const HEURE_RDV_MAX = 12;
 const QUARTS = ["00", "15", "30", "45"];
 
 /* « 09:30 » → « 9 H 30 » */
