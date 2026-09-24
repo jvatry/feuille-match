@@ -2836,11 +2836,13 @@ function modeleConvocation(feuilles, personneDe, tenue) {
     const k = sansAccent(j.prenom || j.nom);
     parPrenom[k] = (parPrenom[k] || 0) + 1;
   });
+  /* { nom: « JULES D. », categorie: « (U9) » }, la catégorie étant écrite
+     plus petit à la suite du nom. */
   const appel = (j) => {
     const prenom = (j.prenom || j.nom).toUpperCase();
     return parPrenom[sansAccent(j.prenom || j.nom)] > 1
-      ? `${prenom} ${j.nom.charAt(0).toUpperCase()} ${j.categorie}`
-      : prenom;
+      ? { nom: `${prenom} ${j.nom.charAt(0).toUpperCase()}.`, categorie: `(${j.categorie})` }
+      : { nom: prenom, categorie: "" };
   };
 
   const plateaux = feuilles.map(({ plateau, equipes }) => ({
@@ -2928,14 +2930,44 @@ function dessinerConvocation(toile, m) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  /* Une case : fond, puis le texte centré, réduit s'il déborde. `gauche` :
-     épaisseur du trait à sa gauche. */
+  /* Une case : fond, puis le texte centré, réduit s'il déborde. `gauche`,
+     `haut` : épaisseur du trait à gauche et au-dessus. `petit` : texte
+     écrit plus petit à la suite (une seule ligne). */
+  const PROPORTION_PETIT = 0.68;
   const caseTexte = (x, y, l, h, fond, texte,
-    { taille = 32, couleur = K.encre, retour = false, gauche = JOINT } = {}) => {
+    { taille = 32, couleur = K.encre, retour = false, gauche = JOINT, haut = JOINT, petit = "" } = {}) => {
     ctx.fillStyle = fond;
-    ctx.fillRect(x + gauche, y + JOINT, l - gauche, h - JOINT);
+    ctx.fillRect(x + gauche, y + haut, l - gauche, h - haut);
     if (!texte) return;
     const maxi = l - gauche - 24;
+    const xMilieu = x + gauche + (l - gauche) / 2;
+    const yMilieu = y + haut + (h - haut) / 2;
+    ctx.fillStyle = couleur;
+
+    if (petit) {
+      const largeurs = (t) => {
+        ctx.font = police(t);
+        const a = ctx.measureText(`${texte} `).width;
+        ctx.font = police(Math.round(t * PROPORTION_PETIT));
+        return [a, ctx.measureText(petit).width];
+      };
+      let t = taille;
+      while (t > 14 && largeurs(t).reduce((s, v) => s + v) > maxi) t -= 1;
+      const [a, b] = largeurs(t);
+      /* Même ligne de base pour les deux tailles. */
+      const x0 = xMilieu - (a + b) / 2;
+      const base = yMilieu + t * 0.35;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.font = police(t);
+      ctx.fillText(texte, x0, base);
+      ctx.font = police(Math.round(t * PROPORTION_PETIT));
+      ctx.fillText(petit, x0 + a, base);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      return;
+    }
+
     let t = taille;
     let lignes = retour ? coupe(texte, t, maxi) : [texte];
     ctx.font = police(t);
@@ -2944,10 +2976,9 @@ function dessinerConvocation(toile, m) {
       ctx.font = police(t);
       if (retour) lignes = coupe(texte, t, maxi);
     }
-    ctx.fillStyle = couleur;
     const pas = t * 1.2;
-    const y0 = y + JOINT + (h - JOINT) / 2 - ((lignes.length - 1) * pas) / 2;
-    lignes.forEach((s, i) => ctx.fillText(s, x + gauche + (l - gauche) / 2, y0 + i * pas));
+    const y0 = yMilieu - ((lignes.length - 1) * pas) / 2;
+    lignes.forEach((s, i) => ctx.fillText(s, xMilieu, y0 + i * pas));
   };
 
   /* Une rangée : le libellé à gauche, puis une case par plateau ou par équipe. */
@@ -2964,7 +2995,11 @@ function dessinerConvocation(toile, m) {
   const parEquipe = (y, h, fond, texteDe, options) => {
     let x = L_LIBELLE;
     m.plateaux.forEach((p) => p.equipes.forEach((e, i) => {
-      caseTexte(x, y, L_COLONNE, h, fond, texteDe(e), { ...options, gauche: i ? JOINT_FIN : JOINT });
+      caseTexte(x, y, L_COLONNE, h, fond, texteDe(e), {
+        ...options,
+        gauche: i ? JOINT_FIN : JOINT,
+        petit: typeof options?.petit === "function" ? options.petit(e) : options?.petit,
+      });
       x += L_COLONNE;
     }));
   };
@@ -2998,8 +3033,10 @@ function dessinerConvocation(toile, m) {
         caseTexte(0, y, L_LIBELLE + toute, h, K.bleu, "JOUEURS CONVOQUÉS");
         break;
       case "joueur":
-        caseTexte(0, y, L_LIBELLE, h, K.bleu, String(r.i + 1), { taille: 28 });
-        parEquipe(y, h, K.blanc, (e) => e.joueurs[r.i] || "", { taille: 28 });
+        /* Trait fin entre deux joueurs, épais au-dessus du premier. */
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, String(r.i + 1), { taille: 28, haut: r.i ? JOINT_FIN : JOINT });
+        parEquipe(y, h, K.blanc, (e) => e.joueurs[r.i]?.nom || "",
+          { taille: 28, haut: r.i ? JOINT_FIN : JOINT, petit: (e) => e.joueurs[r.i]?.categorie || "" });
         break;
       case "educateurs":
         caseTexte(0, y, L_LIBELLE, h, K.bleu, "EDUCATEURS");
