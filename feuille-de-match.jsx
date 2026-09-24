@@ -28,7 +28,8 @@ const MAX_EQUIPES = 8;   // la feuille du district : 4 blocs par page, sur deux 
 const DELEGUE = "Délégué";
 
 const CLE_EFFECTIF = "feuilles:effectif";
-const CLE_PLATEAU = "feuilles:plateau";
+const CLE_PLATEAU = "feuilles:plateau";     // ancienne version : un seul plateau, relu une fois
+const CLE_PLATEAUX = "feuilles:plateaux";
 const CLE_CODE = "feuilles:code";
 const CLE_EMPREINTE = "feuilles:empreinte";
 const CLE_REMPLACEE = "feuilles:empreinte-remplacee";
@@ -60,8 +61,14 @@ const TYPES_PLATEAU = {
 const SECTEUR_DEFAUT = "Sidérurgie";
 const GROUPE_DEFAUT = "EST";
 
+/* Le même samedi, le club peut avoir un plateau par niveau : une feuille
+   chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
+const NIVEAUX = ["Niveau 2", "Intersecteur"];
+const MAX_PLATEAUX = 4;
+
 const PLATEAU_VIDE = {
   type: "U9",
+  niveau: NIVEAUX[0],
   date: "",
   lieu: "",
   secteur: SECTEUR_DEFAUT,
@@ -76,6 +83,49 @@ const equipeVide = (n) => ({
   joueurs: [],
   delegueId: null,
 });
+
+/* Un plateau préparé : ses informations et ses équipes. */
+const feuilleVide = (plateau, equipes) => ({
+  id: `f${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+  plateau,
+  equipes,
+});
+
+/* Un plateau relu depuis le stockage, quelle que soit sa version. */
+function reprendrePlateau(p) {
+  /* Avant le type de plateau il n'y avait pas de champ `type` (il y avait
+     `categorie`) : on retombe sur l'unique type existant plutôt que de planter. */
+  const type = TYPES_PLATEAU[p.type] ? p.type : "U9";
+  /* Avant les valeurs du club (sans `defautsClub`), secteur et groupe les
+     reçoivent une fois ; ensuite, ce que le délégué a choisi au crayon est
+     conservé. Vides : les valeurs du club. */
+  const ancien = !p.defautsClub;
+  return {
+    ...PLATEAU_VIDE,
+    ...p,
+    type,
+    niveau: NIVEAUX.includes(p.niveau) ? p.niveau : NIVEAUX[0],
+    secteur: (!ancien && p.secteur) || SECTEUR_DEFAUT,
+    groupe: (!ancien && p.groupe) || GROUPE_DEFAUT,
+    defautsClub: true,
+  };
+}
+
+/* « Niveau 2 — Garche · 26/09 · 2 éq. · 13 j. » */
+function resumePlateau(f) {
+  const joueurs = f.equipes.reduce((n, e) => n + e.joueurs.length, 0);
+  const details = [
+    f.plateau.lieu,
+    f.plateau.date && jourMois(f.plateau.date),
+    `${f.equipes.length} éq.`,
+    `${joueurs} j.`,
+  ].filter(Boolean);
+  return `${f.plateau.niveau} — ${details.join(" · ")}`;
+}
+
+/* Pour un nom de fichier : « Niveau 2 » → « niveau-2 » */
+const enSlug = (s) =>
+  sansAccent(s).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 const estDelegue = (p) => p.categorie === DELEGUE;
 
@@ -962,9 +1012,22 @@ function suivi(evenement) {
 /* ------------------------------------------------------------------ */
 export default function App() {
   const [effectif, setEffectif] = useState([]);
-  const [plateau, setPlateau] = useState(PLATEAU_VIDE);
-  const [equipes, setEquipes] = useState([equipeVide(1)]);
+  /* Les plateaux préparés pour le samedi ; les onglets Plateau, Équipes et
+     Feuille travaillent sur le plateau actif. */
+  const [feuilles, setFeuilles] = useState(() => [feuilleVide(PLATEAU_VIDE, [equipeVide(1)])]);
+  const [active, setActive] = useState(null);
   const [equipeActive, setEquipeActive] = useState(null);
+  const [viderDemande, setViderDemande] = useState(false);
+
+  const courante = feuilles.find((f) => f.id === active) || feuilles[0];
+  const { plateau, equipes } = courante;
+
+  const majCourante = (champ, valeur) =>
+    setFeuilles((prev) => prev.map((f) => (f.id === courante.id
+      ? { ...f, [champ]: typeof valeur === "function" ? valeur(f[champ]) : valeur }
+      : f)));
+  const setPlateau = (valeur) => majCourante("plateau", valeur);
+  const setEquipes = (valeur) => majCourante("equipes", valeur);
   const [onglet, setOnglet] = useState("effectif");
   const [pret, setPret] = useState(false);
   const [etatEffectif, setEtatEffectif] = useState("chargement");
@@ -1071,30 +1134,28 @@ export default function App() {
         if (v) setNouveautes(JSON.parse(v));
       } catch (e) { /* rien à annoncer */ }
       try {
-        const v = await stockage.lire(CLE_PLATEAU);
-        if (v) {
-          const d = JSON.parse(v);
-          if (d.plateau) {
-            /* Un plateau sauvegardé avant l'introduction du type de plateau
-               n'a pas de champ `type` (il avait `categorie`) : on retombe sur
-               l'unique type existant plutôt que de planter. */
-            const type = TYPES_PLATEAU[d.plateau.type] ? d.plateau.type : "U9";
-            /* Un plateau enregistré avant les valeurs du club (sans
-               `defautsClub`) les reçoit une fois ; ensuite, ce que le délégué
-               a choisi au crayon est conservé. Vide : les valeurs du club. */
-            const ancien = !d.plateau.defautsClub;
-            setPlateau({
-              ...d.plateau,
-              type,
-              secteur: (!ancien && d.plateau.secteur) || SECTEUR_DEFAUT,
-              groupe: (!ancien && d.plateau.groupe) || GROUPE_DEFAUT,
-              defautsClub: true,
-            });
+        let d = null;
+        const v = await stockage.lire(CLE_PLATEAUX);
+        if (v) d = JSON.parse(v);
+        if (!d?.feuilles?.length) {
+          /* Version précédente : un seul plateau en cours. Il devient le
+             premier plateau, rien n'est perdu. */
+          const a = await stockage.lire(CLE_PLATEAU);
+          const ancien = a ? JSON.parse(a) : null;
+          if (ancien?.plateau) {
+            d = { feuilles: [feuilleVide({ ...ancien.plateau, niveau: NIVEAUX[0] }, ancien.equipes)] };
           }
-          if (d.equipes?.length) {
-            setEquipes(d.equipes);
-            setEquipeActive(d.equipes[0].id);
-          }
+        }
+        if (d?.feuilles?.length) {
+          const lues = d.feuilles.map((f) => ({
+            ...f,
+            plateau: reprendrePlateau(f.plateau || {}),
+            equipes: f.equipes?.length ? f.equipes : [equipeVide(1)],
+          }));
+          const choisie = lues.find((f) => f.id === d.active) || lues[0];
+          setFeuilles(lues);
+          setActive(choisie.id);
+          setEquipeActive(choisie.equipes[0].id);
         }
       } catch (e) { /* pas de plateau en cours */ }
 
@@ -1162,7 +1223,9 @@ export default function App() {
   };
 
   useEffect(() => { if (pret) enregistre(CLE_EFFECTIF, effectif); }, [effectif, pret]);
-  useEffect(() => { if (pret) enregistre(CLE_PLATEAU, { plateau, equipes }); }, [plateau, equipes, pret]);
+  useEffect(() => {
+    if (pret) enregistre(CLE_PLATEAUX, { feuilles, active: courante.id });
+  }, [feuilles, active, pret]);
   useEffect(() => { if (pret && publie) enregistre(CLE_PUBLIE, publie); }, [publie, pret]);
   useEffect(() => { if (pret) enregistre(CLE_NOUVEAUTES, nouveautes); }, [nouveautes, pret]);
 
@@ -1256,11 +1319,53 @@ export default function App() {
   const supprimerEquipe = (id) =>
     setEquipes((prev) => (prev.length === 1 ? prev : prev.filter((e) => e.id !== id)));
 
-  const nouveauPlateau = () => {
-    setPlateau({ ...PLATEAU_VIDE, secteur: plateau.secteur, groupe: plateau.groupe, type: plateau.type });
-    const e = equipeVide(1);
-    setEquipes([e]);
-    setEquipeActive(e.id);
+  const choisirPlateau = (id) => {
+    const f = feuilles.find((x) => x.id === id);
+    if (!f) return;
+    setActive(id);
+    setEquipeActive(f.equipes[0]?.id ?? null);
+  };
+
+  /* Un plateau de plus pour le même samedi : il reprend les informations
+     communes du plateau affiché et propose le niveau pas encore pris. */
+  const ajouterPlateau = () => {
+    if (feuilles.length >= MAX_PLATEAUX) return;
+    const pris = feuilles.map((f) => f.plateau.niveau);
+    const f = feuilleVide(
+      {
+        ...PLATEAU_VIDE,
+        type: plateau.type,
+        niveau: NIVEAUX.find((n) => !pris.includes(n)) || plateau.niveau,
+        date: plateau.date,
+        secteur: plateau.secteur,
+        groupe: plateau.groupe,
+        responsable: plateau.responsable,
+      },
+      [equipeVide(1)]
+    );
+    setFeuilles((prev) => [...prev, f]);
+    setActive(f.id);
+    setEquipeActive(f.equipes[0].id);
+    setOnglet("plateau");
+  };
+
+  const supprimerPlateau = (id) => {
+    if (feuilles.length <= 1) return;
+    const reste = feuilles.filter((f) => f.id !== id);
+    setFeuilles(reste);
+    if (id === courante.id) choisirPlateau(reste[0].id);
+  };
+
+  /* Le samedi suivant : chaque plateau garde son niveau, son type, son
+     secteur, son groupe, ses équipes et leurs délégués ; la date, le lieu,
+     le responsable et les joueurs sont vidés. */
+  const nouveauSamedi = () => {
+    setFeuilles((prev) => prev.map((f) => ({
+      ...f,
+      plateau: { ...f.plateau, date: "", lieu: "", responsable: "" },
+      equipes: f.equipes.map((e) => ({ ...e, joueurs: [] })),
+    })));
+    setViderDemande(false);
     setOnglet("plateau");
   };
 
@@ -1339,13 +1444,36 @@ export default function App() {
               {CLUB.nom} · {CLUB.numero}
             </p>
           </div>
-          <button onClick={nouveauPlateau}
+          <button onClick={() => setViderDemande(true)}
             className="text-xs px-3 py-2 rounded-md border flex items-center gap-1.5"
             style={{ borderColor: C.ligne, color: C.ink70 }}>
-            <RotateCcw size={13} /> Nouveau plateau
+            <RotateCcw size={13} /> Nouveau samedi
           </button>
         </div>
+        {viderDemande && (
+          <div className="max-w-3xl mx-auto mt-3 rounded-lg border p-3 text-sm"
+            style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+            <p className="font-medium">
+              {feuilles.length > 1 ? `Vider les ${feuilles.length} plateaux ?` : "Vider le plateau ?"}
+            </p>
+            <p className="mb-2" style={{ color: C.ink70 }}>
+              La date, le lieu, le responsable et les joueurs sont effacés. Les niveaux,
+              les équipes et leurs délégués sont gardés.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={nouveauSamedi} className="px-3 py-1.5 rounded-md text-sm"
+                style={{ background: C.terrain, color: "#fff" }}>Vider</button>
+              <button onClick={() => setViderDemande(false)} className="px-3 py-1.5 rounded-md border text-sm"
+                style={{ borderColor: C.ligne, color: C.ink70, background: C.papier }}>Annuler</button>
+            </div>
+          </div>
+        )}
       </header>
+
+      {onglet !== "effectif" && (
+        <SelecteurPlateaux feuilles={feuilles} active={courante.id}
+          choisir={choisirPlateau} ajouter={ajouterPlateau} />
+      )}
 
       <main className="max-w-3xl mx-auto px-4 py-5">
         {nouveautes && (
@@ -1370,11 +1498,13 @@ export default function App() {
           </div>
         )}
         {onglet === "plateau" && (
-          <VuePlateau plateau={plateau} setPlateau={setPlateau} effectif={effectif}
-            allerEffectif={() => setOnglet("effectif")} />
+          <VuePlateau key={courante.id} plateau={plateau} setPlateau={setPlateau} effectif={effectif}
+            allerEffectif={() => setOnglet("effectif")}
+            supprimer={feuilles.length > 1 ? () => supprimerPlateau(courante.id) : null} />
         )}
         {onglet === "equipes" && (
           <VueEquipes
+            key={courante.id}
             effectif={effectif}
             plateau={plateau}
             equipes={equipes}
@@ -1390,7 +1520,7 @@ export default function App() {
           />
         )}
         {onglet === "feuille" && (
-          <VueFeuille plateau={plateau} equipes={equipes} personneDe={personneDe} />
+          <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
         )}
         {onglet === "effectif" && (
           <VueEffectif
@@ -1640,13 +1770,16 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
 /* ------------------------------------------------------------------ */
 /*  Champs                                                             */
 /* ------------------------------------------------------------------ */
-function Champ({ label, children, aide }) {
+/* `choix` : un groupe de boutons, pas un <label> (toucher le libellé
+   activerait le premier bouton). */
+function Champ({ label, children, aide, choix }) {
+  const Balise = choix ? "div" : "label";
   return (
-    <label className="block mb-4">
+    <Balise className="block mb-4">
       <span className="block text-xs mb-1.5" style={{ color: C.ink70 }}>{label}</span>
       {children}
       {aide && <span className="block text-xs mt-1" style={{ color: C.ink70 }}>{aide}</span>}
-    </label>
+    </Balise>
   );
 }
 
@@ -1701,9 +1834,17 @@ function ChampModifiable({ label, valeur, defaut, changer }) {
 /* ------------------------------------------------------------------ */
 /*  Vue Plateau                                                        */
 /* ------------------------------------------------------------------ */
-function VuePlateau({ plateau, setPlateau, effectif, allerEffectif }) {
+function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer }) {
   const maj = (k) => (e) => setPlateau({ ...plateau, [k]: e.target.value });
   const samedi = plateau.date && new Date(plateau.date + "T12:00").getDay() === 6;
+  const [suppression, setSuppression] = useState(false);
+
+  const choix = (actif) => ({
+    borderColor: actif ? C.terrain : C.ligne,
+    background: actif ? C.terrainSoft : C.papier,
+    color: actif ? C.terrain : C.ink70,
+    fontWeight: actif ? 600 : 400,
+  });
 
   return (
     <section>
@@ -1723,18 +1864,23 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif }) {
         </div>
       )}
 
-      <Champ label="Type de plateau">
+      <Champ label="Type de plateau" choix>
         <div className="flex gap-2">
           {Object.keys(TYPES_PLATEAU).map((t) => (
             <button key={t} onClick={() => setPlateau({ ...plateau, type: t })}
-              className="px-4 py-2 rounded-md border text-sm"
-              style={{
-                borderColor: plateau.type === t ? C.terrain : C.ligne,
-                background: plateau.type === t ? C.terrainSoft : C.papier,
-                color: plateau.type === t ? C.terrain : C.ink70,
-                fontWeight: plateau.type === t ? 600 : 400,
-              }}>
+              className="px-4 py-2 rounded-md border text-sm" style={choix(plateau.type === t)}>
               {TYPES_PLATEAU[t].label}
+            </button>
+          ))}
+        </div>
+      </Champ>
+
+      <Champ label="Niveau" choix>
+        <div className="flex gap-2">
+          {NIVEAUX.map((n) => (
+            <button key={n} onClick={() => setPlateau({ ...plateau, niveau: n })}
+              className="px-4 py-2 rounded-md border text-sm" style={choix(plateau.niveau === n)}>
+              {n}
             </button>
           ))}
         </div>
@@ -1760,7 +1906,61 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif }) {
         <input value={plateau.responsable || ""} onChange={maj("responsable")} placeholder="Nom Prénom"
           className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
       </Champ>
+
+      {supprimer && (
+        <div className="mt-8 pt-4 border-t" style={{ borderColor: C.ligne }}>
+          {!suppression ? (
+            <button onClick={() => setSuppression(true)}
+              className="text-sm flex items-center gap-1.5" style={{ color: C.alerte }}>
+              <Trash2 size={14} /> Supprimer ce plateau
+            </button>
+          ) : (
+            <div className="rounded-lg border p-3 text-sm"
+              style={{ borderColor: C.alerte, background: "#F6E2DD" }}>
+              <p className="font-medium mb-2">Supprimer le plateau {plateau.niveau} et ses équipes ?</p>
+              <div className="flex gap-2">
+                <button onClick={supprimer} className="px-3 py-1.5 rounded-md text-sm"
+                  style={{ background: C.alerte, color: "#fff" }}>Supprimer</button>
+                <button onClick={() => setSuppression(false)} className="px-3 py-1.5 rounded-md border text-sm"
+                  style={{ borderColor: C.ligne, color: C.ink70, background: C.papier }}>Annuler</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
+  );
+}
+
+/* Sous l'en-tête : une puce par plateau du samedi, et de quoi en ajouter. */
+function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
+  return (
+    <div className="border-b" style={{ borderColor: C.ligne, background: C.papier }}>
+      <div className="max-w-3xl mx-auto px-4 py-2 flex gap-2 overflow-x-auto">
+        {feuilles.map((f) => {
+          const actif = f.id === active;
+          return (
+            <button key={f.id} onClick={() => choisir(f.id)}
+              className="shrink-0 px-3 py-1.5 rounded-full border text-xs whitespace-nowrap"
+              style={{
+                borderColor: actif ? C.terrain : C.ligne,
+                background: actif ? C.terrainSoft : C.papier,
+                color: actif ? C.terrain : C.ink70,
+                fontWeight: actif ? 600 : 400,
+              }}>
+              {resumePlateau(f)}
+            </button>
+          );
+        })}
+        {feuilles.length < MAX_PLATEAUX && (
+          <button onClick={ajouter}
+            className="shrink-0 px-3 py-1.5 rounded-full border border-dashed text-xs flex items-center gap-1 whitespace-nowrap"
+            style={{ borderColor: C.terrain, color: C.terrain }}>
+            <Plus size={13} /> Plateau
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2512,7 +2712,7 @@ function VueFeuille({ plateau, equipes, personneDe }) {
       const url = URL.createObjectURL(new Blob([octets], { type: "application/pdf" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `feuille-${plateau.date || "date"}-${plateau.lieu || "lieu"}.pdf`;
+      a.download = `feuille-${plateau.date || "date"}-${enSlug(plateau.niveau) || "plateau"}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
