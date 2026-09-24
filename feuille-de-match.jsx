@@ -123,6 +123,11 @@ function resumePlateau(f) {
   return `${f.plateau.niveau} — ${details.join(" · ")}`;
 }
 
+/* Où joue quelqu'un : le nom de l'équipe, précédé du niveau quand c'est
+   un autre plateau que `feuilleId` (« Niveau 2 · F.C. HETTANGE GRANDE 1 »). */
+const nomPlace = (place, feuilleId) =>
+  place.feuilleId === feuilleId ? place.equipe.nom : `${place.niveau} · ${place.equipe.nom}`;
+
 /* Pour un nom de fichier : « Niveau 2 » → « niveau-2 » */
 const enSlug = (s) =>
   sansAccent(s).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -1028,6 +1033,23 @@ export default function App() {
       : f)));
   const setPlateau = (valeur) => majCourante("plateau", valeur);
   const setEquipes = (valeur) => majCourante("equipes", valeur);
+
+  /* Ce qui touche une personne (retrait, correction) vaut pour les équipes
+     de tous les plateaux. Rien ne change si `f` ne change rien. */
+  const toutesEquipes = (f) =>
+    setFeuilles((prev) => {
+      let change = false;
+      const suite = prev.map((x) => {
+        const equipes = f(x.equipes);
+        if (equipes === x.equipes) return x;
+        change = true;
+        return { ...x, equipes };
+      });
+      return change ? suite : prev;
+    });
+
+  /* Les équipes sont numérotées à la suite d'un plateau à l'autre. */
+  const numeroSuivant = () => feuilles.reduce((n, f) => n + f.equipes.length, 0) + 1;
   const [onglet, setOnglet] = useState("effectif");
   const [pret, setPret] = useState(false);
   const [etatEffectif, setEtatEffectif] = useState("chargement");
@@ -1234,7 +1256,7 @@ export default function App() {
   useEffect(() => {
     if (!pret || !effectif.length) return;
     const ids = new Set(effectif.map((p) => p.id));
-    setEquipes((prev) => {
+    toutesEquipes((prev) => {
       const orphelin = prev.some((e) =>
         e.joueurs.some((i) => !ids.has(i)) || (e.delegueId && !ids.has(e.delegueId)));
       if (!orphelin) return prev;
@@ -1286,24 +1308,37 @@ export default function App() {
 
   const personneDe = (id) => effectif.find((p) => p.id === id);
 
-  const affectation = useMemo(() => {
-    const m = {};
-    equipes.forEach((e) => e.joueurs.forEach((id) => { m[id] = e; }));
-    return m;
-  }, [equipes]);
+  /* Un enfant ne joue que dans une équipe par samedi, tous plateaux
+     confondus : où joue chacun, et où chaque délégué est déjà désigné. */
+  const { affectation, delegations } = useMemo(() => {
+    const joue = {};
+    const delegue = {};
+    feuilles.forEach((f) => f.equipes.forEach((e) => {
+      const place = { equipe: e, feuilleId: f.id, niveau: f.plateau.niveau };
+      e.joueurs.forEach((id) => { joue[id] = place; });
+      if (e.delegueId) delegue[e.delegueId] = [...(delegue[e.delegueId] || []), place];
+    }));
+    return { affectation: joue, delegations: delegue };
+  }, [feuilles]);
 
   const basculer = (equipeId, joueurId) => {
-    setEquipes((prev) =>
-      prev.map((e) => {
-        if (e.id !== equipeId) return e;
-        const dejaIci = e.joueurs.includes(joueurId);
-        if (!dejaIci && e.joueurs.length >= MAX_JOUEURS) return e;
-        return {
-          ...e,
-          joueurs: dejaIci ? e.joueurs.filter((i) => i !== joueurId) : [...e.joueurs, joueurId],
-        };
-      })
-    );
+    setFeuilles((prev) => {
+      const ailleurs = prev.some((f) => f.equipes.some((e) =>
+        e.id !== equipeId && e.joueurs.includes(joueurId)));
+      if (ailleurs) return prev;
+      return prev.map((f) => ({
+        ...f,
+        equipes: f.equipes.map((e) => {
+          if (e.id !== equipeId) return e;
+          const dejaIci = e.joueurs.includes(joueurId);
+          if (!dejaIci && e.joueurs.length >= MAX_JOUEURS) return e;
+          return {
+            ...e,
+            joueurs: dejaIci ? e.joueurs.filter((i) => i !== joueurId) : [...e.joueurs, joueurId],
+          };
+        }),
+      }));
+    });
   };
 
   const majEquipe = (id, patch) =>
@@ -1311,7 +1346,7 @@ export default function App() {
 
   const ajouterEquipe = () => {
     if (equipes.length >= MAX_EQUIPES) return;
-    const e = equipeVide(equipes.length + 1);
+    const e = equipeVide(numeroSuivant());
     setEquipes((prev) => [...prev, e]);
     setEquipeActive(e.id);
   };
@@ -1341,7 +1376,7 @@ export default function App() {
         groupe: plateau.groupe,
         responsable: plateau.responsable,
       },
-      [equipeVide(1)]
+      [equipeVide(numeroSuivant())]
     );
     setFeuilles((prev) => [...prev, f]);
     setActive(f.id);
@@ -1375,7 +1410,7 @@ export default function App() {
     const nouvelId = idPersonne(fiche.licence, fiche.nom, fiche.prenom);
     setEffectif((prev) => prev.map((p) => (p.id === id ? { ...fiche, id: nouvelId } : p)));
     if (nouvelId === id) return;
-    setEquipes((prev) =>
+    toutesEquipes((prev) =>
       prev.map((e) => ({
         ...e,
         joueurs: e.joueurs.map((i) => (i === id ? nouvelId : i)),
@@ -1387,7 +1422,7 @@ export default function App() {
   /* Retirer quelqu'un de l'effectif le retire aussi des équipes. */
   const retirerDeLEffectif = (id) => {
     setEffectif((prev) => prev.filter((p) => p.id !== id));
-    setEquipes((prev) =>
+    toutesEquipes((prev) =>
       prev.map((e) => ({
         ...e,
         joueurs: e.joueurs.filter((i) => i !== id),
@@ -1511,6 +1546,8 @@ export default function App() {
             equipeActive={equipeActive}
             setEquipeActive={setEquipeActive}
             affectation={affectation}
+            delegations={delegations}
+            feuilleId={courante.id}
             basculer={basculer}
             majEquipe={majEquipe}
             ajouterEquipe={ajouterEquipe}
@@ -1968,7 +2005,7 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
 /*  Vue Équipes                                                        */
 /* ------------------------------------------------------------------ */
 function VueEquipes({
-  effectif, plateau, equipes, equipeActive, setEquipeActive, affectation,
+  effectif, plateau, equipes, equipeActive, setEquipeActive, affectation, delegations, feuilleId,
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
 }) {
   const [recherche, setRecherche] = useState("");
@@ -2082,12 +2119,17 @@ function VueEquipes({
                 onChange={(e) => majEquipe(active.id, { delegueId: e.target.value || null })}
                 className="w-full border rounded-md px-3 py-2 text-sm mb-3" style={styleInput}>
                 <option value="">Délégué — à désigner</option>
-                {delegues.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.nom} {d.prenom}{d.licence ? ` — ${d.licence}` : ""}
-                    {d.valide ? "" : " (licence non validée)"}
-                  </option>
-                ))}
+                {delegues.map((d) => {
+                  /* Pas de blocage (un parent peut dépanner), mais on le signale. */
+                  const ailleurs = (delegations[d.id] || []).filter((p) => p.equipe.id !== active.id);
+                  return (
+                    <option key={d.id} value={d.id}>
+                      {d.nom} {d.prenom}{d.licence ? ` — ${d.licence}` : ""}
+                      {d.valide ? "" : " (licence non validée)"}
+                      {ailleurs.length ? ` — déjà : ${ailleurs.map((p) => nomPlace(p, null)).join(", ")}` : ""}
+                    </option>
+                  );
+                })}
               </select>
             )}
 
@@ -2163,7 +2205,7 @@ function VueEquipes({
               <ul className="space-y-1.5">
                 {s.joueurs.map((j) => {
                   const dans = affectation[j.id];
-                  const ici = dans?.id === active.id;
+                  const ici = dans?.equipe.id === active.id;
                   const bloque = dans && !ici;
                   const complet = !ici && active.joueurs.length >= MAX_JOUEURS;
                   return (
@@ -2193,7 +2235,11 @@ function VueEquipes({
                           </span>
                         </span>
                         {!j.valide && <BadgeLicence />}
-                        {bloque && <span className="text-xs shrink-0" style={{ color: C.ink70 }}>{dans.nom}</span>}
+                        {bloque && (
+                          <span className="text-xs shrink-0 text-right" style={{ color: C.ink70 }}>
+                            {nomPlace(dans, feuilleId)}
+                          </span>
+                        )}
                       </button>
                     </li>
                   );
@@ -2537,7 +2583,7 @@ function VueEffectif({
                   </span>
                   <span className="block text-xs" style={{ color: C.ink70 }}>
                     {p.licence}{p.naissance ? ` · ${p.naissance}` : ""}
-                    {affectation[p.id] ? ` · ${affectation[p.id].nom}` : ""}
+                    {affectation[p.id] ? ` · ${nomPlace(affectation[p.id], null)}` : ""}
                   </span>
                 </span>
                 {!p.valide && <BadgeLicence />}
