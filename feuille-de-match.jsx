@@ -1861,6 +1861,51 @@ function Champ({ label, children, aide, choix }) {
 
 const styleInput = { background: C.papier, borderColor: C.ligne, color: C.ink };
 
+/* Heure au quart d'heure en deux touchers : l'heure, puis les minutes.
+   Les sélecteurs d'heure des téléphones ignorent le pas de 15 minutes. */
+function SelecteurHeure({ valeur, changer }) {
+  const [h, m] = valeur ? valeur.split(":") : ["", ""];
+  const heure = h ? Number(h) : null;
+  const heures = Array.from({ length: HEURE_RDV_MAX - HEURE_RDV_MIN + 1 }, (_, i) => HEURE_RDV_MIN + i);
+  const permis = (hh, mm) => hh < HEURE_RDV_MAX || mm === "00";
+  const vers = (hh, mm) => `${String(hh).padStart(2, "0")}:${mm}`;
+
+  const pastille = (actif, desactive = false) => ({
+    borderColor: actif ? C.terrain : C.ligne,
+    background: actif ? C.terrain : C.papier,
+    color: actif ? "#fff" : C.ink,
+    fontWeight: actif ? 600 : 400,
+    opacity: desactive ? 0.35 : 1,
+  });
+
+  return (
+    <div>
+      <div className="grid grid-cols-5 gap-1.5 mb-2">
+        {heures.map((hh) => (
+          <button key={hh} aria-pressed={heure === hh}
+            onClick={() => changer(vers(hh, QUARTS.includes(m) && permis(hh, m) ? m : "00"))}
+            className="py-2 rounded-md border text-sm" style={pastille(heure === hh)}>
+            {hh} h
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-4 gap-1.5">
+        {QUARTS.map((mm) => {
+          const desactive = heure === null || !permis(heure, mm);
+          return (
+            <button key={mm} disabled={desactive} aria-pressed={heure !== null && m === mm}
+              onClick={() => changer(vers(heure, mm))}
+              className="py-2 rounded-md border text-sm"
+              style={pastille(heure !== null && m === mm, desactive)}>
+              {mm}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* Une valeur presque toujours la même : le champ est pré-rempli et grisé, le
    crayon le rend modifiable. Vidé, il reprend la valeur par défaut. */
 function ChampModifiable({ label, valeur, defaut, changer }) {
@@ -1994,21 +2039,15 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
       </Champ>
 
-      <Champ label="Adresse du plateau" aide="Pour la convocation des joueurs.">
+      <Champ label="Adresse du plateau">
         <textarea rows={3} value={plateau.adresse || ""} onChange={maj("adresse")}
           placeholder={"Stade municipal\nRue du stade\n57000 Ville"}
           className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
       </Champ>
 
-      <Champ label="Heure du rendez-vous">
-        <select value={plateau.heureRdv || ""} onChange={maj("heureRdv")}
-          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput}>
-          <option value="">— à choisir</option>
-          {plateau.heureRdv && !HEURES_RDV.includes(plateau.heureRdv) && (
-            <option value={plateau.heureRdv}>{heureRdv(plateau.heureRdv)}</option>
-          )}
-          {HEURES_RDV.map((h) => <option key={h} value={h}>{heureRdv(h)}</option>)}
-        </select>
+      <Champ label="Heure du rendez-vous" choix>
+        <SelecteurHeure valeur={plateau.heureRdv || ""}
+          changer={(heureRdv) => setPlateau({ ...plateau, heureRdv })} />
       </Champ>
 
       <ChampModifiable label="Secteur" valeur={plateau.secteur} defaut={SECTEUR_DEFAUT}
@@ -2056,7 +2095,7 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
           const actif = f.id === active;
           return (
             <button key={f.id} onClick={() => choisir(f.id)}
-              className="shrink-0 px-3 py-1.5 rounded-full border text-xs whitespace-nowrap"
+              className="shrink-0 px-4 py-2.5 rounded-full border text-sm whitespace-nowrap"
               style={{
                 borderColor: actif ? C.terrain : C.ligne,
                 background: actif ? C.terrainSoft : C.papier,
@@ -2070,9 +2109,9 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
         {feuilles.length < MAX_PLATEAUX &&
           NIVEAUX.some((n) => !feuilles.some((f) => f.plateau.niveau === n)) && (
           <button onClick={ajouter}
-            className="shrink-0 px-3 py-1.5 rounded-full border border-dashed text-xs flex items-center gap-1 whitespace-nowrap"
+            className="shrink-0 px-4 py-2.5 rounded-full border border-dashed text-sm flex items-center gap-1 whitespace-nowrap"
             style={{ borderColor: C.terrain, color: C.terrain }}>
-            <Plus size={13} /> Plateau
+            <Plus size={15} /> Plateau
           </button>
         )}
       </div>
@@ -2815,9 +2854,10 @@ const ABREVIATION_NIVEAU = { "Niveau 2": "N2" };
 /* « 2026-09-26 » → « 26/09/26 » */
 const dateCourte = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
 
-/* Rendez-vous au quart d'heure, de 7 h à 19 h 45. */
-const HEURES_RDV = Array.from({ length: 13 * 4 }, (_, i) =>
-  `${String(7 + Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}`);
+/* Rendez-vous au quart d'heure, de 8 h à 17 h. */
+const HEURE_RDV_MIN = 8;
+const HEURE_RDV_MAX = 17;
+const QUARTS = ["00", "15", "30", "45"];
 
 /* « 09:30 » → « 9 H 30 » */
 const heureRdv = (hhmm) => {
@@ -3135,9 +3175,6 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
           <Share2 size={15} /> Partager
         </button>
       </div>
-      <p className="text-sm mb-4" style={{ color: C.ink70 }}>
-        Tous les plateaux du samedi sur une image, à envoyer aux parents.
-      </p>
 
       <ChampModifiable label="Tenue" valeur={tenue} defaut={TENUE_DEFAUT} changer={setTenue} />
 
