@@ -27,7 +27,7 @@ const C = {
 
 const LOGO = "./logo-fchg.png";
 
-const CLUB = { nom: "F.C. Hettange Grande", numero: "527314" };
+const CLUB = { nom: "F.C. Hettange-Grande", numero: "527314" };
 
 const MIN_JOUEURS = 5;   // 4 joueurs de champ + 1 gardien
 const MAX_JOUEURS = 8;   // + 3 remplaçants
@@ -137,7 +137,7 @@ function resumePlateau(f) {
 }
 
 /* Où joue quelqu'un : le nom de l'équipe, précédé du niveau quand c'est
-   un autre plateau que `feuilleId` (« Niveau 2 · F.C. HETTANGE GRANDE 1 »). */
+   un autre plateau que `feuilleId` (« Niveau 2 · F.C. HETTANGE-GRANDE 1 »). */
 const nomPlace = (place, feuilleId) =>
   place.feuilleId === feuilleId ? place.equipe.nom : `${place.niveau} · ${place.equipe.nom}`;
 
@@ -1192,7 +1192,12 @@ export default function App() {
           const lues = d.feuilles.map((f) => ({
             ...f,
             plateau: reprendrePlateau(f.plateau || {}),
-            equipes: f.equipes?.length ? f.equipes : [equipeVide(1)],
+            /* Les noms d'équipe par défaut d'avant le trait d'union
+               (« F.C. HETTANGE GRANDE 1 ») prennent le nom officiel. */
+            equipes: (f.equipes?.length ? f.equipes : [equipeVide(1)]).map((e) => ({
+              ...e,
+              nom: e.nom.replace(/^F\.C\. HETTANGE GRANDE\b/, CLUB.nom.toUpperCase()),
+            })),
           }));
           const choisie = lues.find((f) => f.id === d.active) || lues[0];
           setFeuilles(lues);
