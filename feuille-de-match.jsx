@@ -64,7 +64,7 @@ const GROUPE_DEFAUT = "EST";
 /* Le même samedi, le club peut avoir un plateau par niveau : une feuille
    chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
 const NIVEAUX = ["Niveau 2", "Intersecteur"];
-const MAX_PLATEAUX = 4;
+const MAX_PLATEAUX = NIVEAUX.length;   // un plateau par niveau
 
 const PLATEAU_VIDE = {
   type: "U9",
@@ -1362,15 +1362,16 @@ export default function App() {
   };
 
   /* Un plateau de plus pour le même samedi : il reprend les informations
-     communes du plateau affiché et propose le niveau pas encore pris. */
+     communes du plateau affiché et prend le niveau encore libre. */
   const ajouterPlateau = () => {
-    if (feuilles.length >= MAX_PLATEAUX) return;
     const pris = feuilles.map((f) => f.plateau.niveau);
+    const libre = NIVEAUX.find((n) => !pris.includes(n));
+    if (feuilles.length >= MAX_PLATEAUX || !libre) return;
     const f = feuilleVide(
       {
         ...PLATEAU_VIDE,
         type: plateau.type,
-        niveau: NIVEAUX.find((n) => !pris.includes(n)) || plateau.niveau,
+        niveau: libre,
         date: plateau.date,
         secteur: plateau.secteur,
         groupe: plateau.groupe,
@@ -1535,7 +1536,8 @@ export default function App() {
         {onglet === "plateau" && (
           <VuePlateau key={courante.id} plateau={plateau} setPlateau={setPlateau} effectif={effectif}
             allerEffectif={() => setOnglet("effectif")}
-            supprimer={feuilles.length > 1 ? () => supprimerPlateau(courante.id) : null} />
+            supprimer={feuilles.length > 1 ? () => supprimerPlateau(courante.id) : null}
+            niveauxPris={feuilles.filter((f) => f.id !== courante.id).map((f) => f.plateau.niveau)} />
         )}
         {onglet === "equipes" && (
           <VueEquipes
@@ -1871,10 +1873,11 @@ function ChampModifiable({ label, valeur, defaut, changer }) {
 /* ------------------------------------------------------------------ */
 /*  Vue Plateau                                                        */
 /* ------------------------------------------------------------------ */
-function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer }) {
+function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, niveauxPris }) {
   const maj = (k) => (e) => setPlateau({ ...plateau, [k]: e.target.value });
   const samedi = plateau.date && new Date(plateau.date + "T12:00").getDay() === 6;
   const [suppression, setSuppression] = useState(false);
+  const [choixNiveau, setChoixNiveau] = useState(false);
 
   const choix = (actif) => ({
     borderColor: actif ? C.terrain : C.ligne,
@@ -1885,10 +1888,42 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer })
 
   return (
     <section>
-      <h2 className="text-base font-semibold mb-1">Le plateau de samedi</h2>
-      <p className="text-sm mb-5" style={{ color: C.ink70 }}>
-        Ces informations remplissent le bas de la feuille de match.
-      </p>
+      {/* Le niveau est le nom du plateau, pas un bouton : on change de
+          plateau par le sélecteur du haut, et de niveau par le crayon. */}
+      <div className="flex items-center gap-2 mb-5">
+        <h2 className="text-lg font-semibold" style={{ color: C.terrain }}>
+          Plateau {plateau.niveau}
+        </h2>
+        {!choixNiveau && (
+          <button onClick={() => setChoixNiveau(true)} aria-label="Changer le niveau"
+            className="p-1.5 rounded-md border" style={{ borderColor: C.ligne, color: C.terrain }}>
+            <Pencil size={14} />
+          </button>
+        )}
+      </div>
+
+      {choixNiveau && (
+        <div className="rounded-lg border p-3 mb-5" style={{ borderColor: C.terrain, background: C.papier }}>
+          <p className="text-xs mb-2" style={{ color: C.ink70 }}>Niveau de ce plateau</p>
+          <div className="flex flex-wrap gap-2">
+            {NIVEAUX.map((n) => {
+              const pris = niveauxPris.includes(n);
+              return (
+                <button key={n} disabled={pris}
+                  onClick={() => { setPlateau({ ...plateau, niveau: n }); setChoixNiveau(false); }}
+                  className="px-4 py-2 rounded-md border text-sm"
+                  style={{ ...choix(plateau.niveau === n), opacity: pris ? 0.45 : 1 }}>
+                  {n}{pris ? " — déjà utilisé" : ""}
+                </button>
+              );
+            })}
+            <button onClick={() => setChoixNiveau(false)} className="px-4 py-2 rounded-md border text-sm"
+              style={{ borderColor: C.ligne, color: C.ink70 }}>
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
 
       {effectif.length === 0 && (
         <div className="rounded-lg border p-3 mb-5 text-sm"
@@ -1907,17 +1942,6 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer })
             <button key={t} onClick={() => setPlateau({ ...plateau, type: t })}
               className="px-4 py-2 rounded-md border text-sm" style={choix(plateau.type === t)}>
               {TYPES_PLATEAU[t].label}
-            </button>
-          ))}
-        </div>
-      </Champ>
-
-      <Champ label="Niveau" choix>
-        <div className="flex gap-2">
-          {NIVEAUX.map((n) => (
-            <button key={n} onClick={() => setPlateau({ ...plateau, niveau: n })}
-              className="px-4 py-2 rounded-md border text-sm" style={choix(plateau.niveau === n)}>
-              {n}
             </button>
           ))}
         </div>
@@ -1989,7 +2013,8 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
             </button>
           );
         })}
-        {feuilles.length < MAX_PLATEAUX && (
+        {feuilles.length < MAX_PLATEAUX &&
+          NIVEAUX.some((n) => !feuilles.some((f) => f.plateau.niveau === n)) && (
           <button onClick={ajouter}
             className="shrink-0 px-3 py-1.5 rounded-full border border-dashed text-xs flex items-center gap-1 whitespace-nowrap"
             style={{ borderColor: C.terrain, color: C.terrain }}>
