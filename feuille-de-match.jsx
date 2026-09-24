@@ -1030,8 +1030,8 @@ export default function App() {
   const [equipeActive, setEquipeActive] = useState(null);
   const [viderDemande, setViderDemande] = useState(false);
   const [tenue, setTenue] = useState(TENUE_DEFAUT);
-  /* Onglet Feuille : la feuille de match du plateau, ou la convocation. */
-  const [document_, setDocument] = useState("feuille");
+  /* Onglet Feuille : la convocation (en semaine), ou la feuille de match du plateau. */
+  const [document_, setDocument] = useState("convocation");
 
   const courante = feuilles.find((f) => f.id === active) || feuilles[0];
   const { plateau, equipes } = courante;
@@ -1580,7 +1580,7 @@ export default function App() {
         {onglet === "feuille" && (
           <div className="grid grid-cols-2 gap-1 p-1 mb-5 rounded-lg border"
             style={{ borderColor: C.ligne, background: C.papier }}>
-            {[["feuille", "Feuille de match"], ["convocation", "Convocation"]].map(([id, libelle]) => (
+            {[["convocation", "Convocation"], ["feuille", "Feuille de match"]].map(([id, libelle]) => (
               <button key={id} onClick={() => setDocument(id)}
                 aria-pressed={document_ === id}
                 className="py-2 rounded-md text-sm"
@@ -2001,8 +2001,14 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
       </Champ>
 
       <Champ label="Heure du rendez-vous">
-        <input type="time" value={plateau.heureRdv || ""} onChange={maj("heureRdv")}
-          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
+        <select value={plateau.heureRdv || ""} onChange={maj("heureRdv")}
+          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput}>
+          <option value="">— à choisir</option>
+          {plateau.heureRdv && !HEURES_RDV.includes(plateau.heureRdv) && (
+            <option value={plateau.heureRdv}>{heureRdv(plateau.heureRdv)}</option>
+          )}
+          {HEURES_RDV.map((h) => <option key={h} value={h}>{heureRdv(h)}</option>)}
+        </select>
       </Champ>
 
       <ChampModifiable label="Secteur" valeur={plateau.secteur} defaut={SECTEUR_DEFAUT}
@@ -2809,6 +2815,10 @@ const ABREVIATION_NIVEAU = { "Niveau 2": "N2" };
 /* « 2026-09-26 » → « 26/09/26 » */
 const dateCourte = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
 
+/* Rendez-vous au quart d'heure, de 7 h à 19 h 45. */
+const HEURES_RDV = Array.from({ length: 13 * 4 }, (_, i) =>
+  `${String(7 + Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}`);
+
 /* « 09:30 » → « 9 H 30 » */
 const heureRdv = (hhmm) => {
   if (!hhmm) return "";
@@ -2873,6 +2883,7 @@ function dessinerConvocation(toile, m) {
   const L_LIBELLE = 300;
   const L_COLONNE = 250;
   const JOINT = 7;
+  const JOINT_FIN = 2;
   const police = (t) => `bold ${t}px "Times New Roman", Times, serif`;
   const colonnes = m.plateaux.reduce((n, p) => n + p.equipes.length, 0);
   const largeur = L_LIBELLE + colonnes * L_COLONNE + JOINT;
@@ -2917,12 +2928,14 @@ function dessinerConvocation(toile, m) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  /* Une case : fond, puis le texte centré, réduit s'il déborde. */
-  const caseTexte = (x, y, l, h, fond, texte, { taille = 32, couleur = K.encre, retour = false } = {}) => {
+  /* Une case : fond, puis le texte centré, réduit s'il déborde. `gauche` :
+     épaisseur du trait à sa gauche. */
+  const caseTexte = (x, y, l, h, fond, texte,
+    { taille = 32, couleur = K.encre, retour = false, gauche = JOINT } = {}) => {
     ctx.fillStyle = fond;
-    ctx.fillRect(x + JOINT, y + JOINT, l - JOINT, h - JOINT);
+    ctx.fillRect(x + gauche, y + JOINT, l - gauche, h - JOINT);
     if (!texte) return;
-    const maxi = l - JOINT - 24;
+    const maxi = l - gauche - 24;
     let t = taille;
     let lignes = retour ? coupe(texte, t, maxi) : [texte];
     ctx.font = police(t);
@@ -2934,7 +2947,7 @@ function dessinerConvocation(toile, m) {
     ctx.fillStyle = couleur;
     const pas = t * 1.2;
     const y0 = y + JOINT + (h - JOINT) / 2 - ((lignes.length - 1) * pas) / 2;
-    lignes.forEach((s, i) => ctx.fillText(s, x + JOINT + (l - JOINT) / 2, y0 + i * pas));
+    lignes.forEach((s, i) => ctx.fillText(s, x + gauche + (l - gauche) / 2, y0 + i * pas));
   };
 
   /* Une rangée : le libellé à gauche, puis une case par plateau ou par équipe. */
@@ -2946,10 +2959,12 @@ function dessinerConvocation(toile, m) {
       x += l;
     });
   };
+  /* Entre deux équipes d'un même plateau, un trait fin ; entre deux
+     plateaux, le trait épais. */
   const parEquipe = (y, h, fond, texteDe, options) => {
     let x = L_LIBELLE;
-    m.plateaux.forEach((p) => p.equipes.forEach((e) => {
-      caseTexte(x, y, L_COLONNE, h, fond, texteDe(e), options);
+    m.plateaux.forEach((p) => p.equipes.forEach((e, i) => {
+      caseTexte(x, y, L_COLONNE, h, fond, texteDe(e), { ...options, gauche: i ? JOINT_FIN : JOINT });
       x += L_COLONNE;
     }));
   };
