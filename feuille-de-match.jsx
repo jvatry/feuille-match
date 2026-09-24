@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Trash2, Printer, Users, FileText, ClipboardList, Search,
   RotateCcw, AlertTriangle, Check, UserPlus, X, Download, Upload,
-  ChevronDown, ChevronRight, Pencil,
+  ChevronDown, ChevronRight, Pencil, Share2,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -30,6 +30,7 @@ const DELEGUE = "Délégué";
 const CLE_EFFECTIF = "feuilles:effectif";
 const CLE_PLATEAU = "feuilles:plateau";     // ancienne version : un seul plateau, relu une fois
 const CLE_PLATEAUX = "feuilles:plateaux";
+const CLE_TENUE = "feuilles:tenue";
 const CLE_CODE = "feuilles:code";
 const CLE_EMPREINTE = "feuilles:empreinte";
 const CLE_REMPLACEE = "feuilles:empreinte-remplacee";
@@ -57,6 +58,9 @@ const TYPES_PLATEAU = {
   U9: { label: "U9", categoriesJoueurs: ["U8", "U9"] },
 };
 
+/* Tenue rappelée sur la convocation, modifiable au crayon. */
+const TENUE_DEFAUT = "maillot rayé / short bleu-blanc / chaussettes bleues, protège-tibias";
+
 /* Secteur et groupe du club : pré-remplis, modifiables sur l'onglet Plateau. */
 const SECTEUR_DEFAUT = "Sidérurgie";
 const GROUPE_DEFAUT = "EST";
@@ -71,6 +75,8 @@ const PLATEAU_VIDE = {
   niveau: NIVEAUX[0],
   date: "",
   lieu: "",
+  adresse: "",
+  heureRdv: "",
   secteur: SECTEUR_DEFAUT,
   groupe: GROUPE_DEFAUT,
   defautsClub: true,   // marque les plateaux qui ont déjà reçu ces valeurs
@@ -1023,6 +1029,9 @@ export default function App() {
   const [active, setActive] = useState(null);
   const [equipeActive, setEquipeActive] = useState(null);
   const [viderDemande, setViderDemande] = useState(false);
+  const [tenue, setTenue] = useState(TENUE_DEFAUT);
+  /* Onglet Feuille : la feuille de match du plateau, ou la convocation. */
+  const [document_, setDocument] = useState("feuille");
 
   const courante = feuilles.find((f) => f.id === active) || feuilles[0];
   const { plateau, equipes } = courante;
@@ -1156,6 +1165,10 @@ export default function App() {
         if (v) setNouveautes(JSON.parse(v));
       } catch (e) { /* rien à annoncer */ }
       try {
+        const v = await stockage.lire(CLE_TENUE);
+        if (v) setTenue(JSON.parse(v));
+      } catch (e) { /* tenue par défaut */ }
+      try {
         let d = null;
         const v = await stockage.lire(CLE_PLATEAUX);
         if (v) d = JSON.parse(v);
@@ -1250,6 +1263,7 @@ export default function App() {
   }, [feuilles, active, pret]);
   useEffect(() => { if (pret && publie) enregistre(CLE_PUBLIE, publie); }, [publie, pret]);
   useEffect(() => { if (pret) enregistre(CLE_NOUVEAUTES, nouveautes); }, [nouveautes, pret]);
+  useEffect(() => { if (pret) enregistre(CLE_TENUE, tenue); }, [tenue, pret]);
 
   /* Une personne retirée de l'effectif (à la main ou par une mise à jour)
      ne reste pas dans une équipe. */
@@ -1306,7 +1320,11 @@ export default function App() {
     suivi("effectif/publie");
   };
 
-  const personneDe = (id) => effectif.find((p) => p.id === id);
+  /* Stable tant que l'effectif ne change pas : les aperçus en dépendent. */
+  const personneDe = useMemo(() => {
+    const parId = new Map(effectif.map((p) => [p.id, p]));
+    return (id) => parId.get(id);
+  }, [effectif]);
 
   /* Un enfant ne joue que dans une équipe par samedi, tous plateaux
      confondus : où joue chacun, et où chaque délégué est déjà désigné. */
@@ -1393,12 +1411,13 @@ export default function App() {
   };
 
   /* Le samedi suivant : chaque plateau garde son niveau, son type, son
-     secteur, son groupe, ses équipes et leurs délégués ; la date, le lieu,
-     le responsable et les joueurs sont vidés. */
+     secteur, son groupe, ses équipes et leurs délégués ; la date, le lieu
+     (adresse et heure de rendez-vous comprises), le responsable et les
+     joueurs sont vidés. */
   const nouveauSamedi = () => {
     setFeuilles((prev) => prev.map((f) => ({
       ...f,
-      plateau: { ...f.plateau, date: "", lieu: "", responsable: "" },
+      plateau: { ...f.plateau, date: "", lieu: "", adresse: "", heureRdv: "", responsable: "" },
       equipes: f.equipes.map((e) => ({ ...e, joueurs: [] })),
     })));
     setViderDemande(false);
@@ -1559,7 +1578,25 @@ export default function App() {
           />
         )}
         {onglet === "feuille" && (
+          <div className="grid grid-cols-2 gap-1 p-1 mb-5 rounded-lg border"
+            style={{ borderColor: C.ligne, background: C.papier }}>
+            {[["feuille", "Feuille de match"], ["convocation", "Convocation"]].map(([id, libelle]) => (
+              <button key={id} onClick={() => setDocument(id)}
+                aria-pressed={document_ === id}
+                className="py-2 rounded-md text-sm"
+                style={document_ === id
+                  ? { background: C.terrainSoft, color: C.terrain, fontWeight: 600 }
+                  : { color: C.ink70 }}>
+                {libelle}
+              </button>
+            ))}
+          </div>
+        )}
+        {onglet === "feuille" && document_ === "feuille" && (
           <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
+        )}
+        {onglet === "feuille" && document_ === "convocation" && (
+          <VueConvocation feuilles={feuilles} personneDe={personneDe} tenue={tenue} setTenue={setTenue} />
         )}
         {onglet === "effectif" && (
           <VueEffectif
@@ -1954,6 +1991,17 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
 
       <Champ label="Plateau à">
         <input value={plateau.lieu} onChange={maj("lieu")} placeholder="Garche"
+          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
+      </Champ>
+
+      <Champ label="Adresse du plateau" aide="Pour la convocation des joueurs.">
+        <textarea rows={3} value={plateau.adresse || ""} onChange={maj("adresse")}
+          placeholder={"Stade municipal\nRue du stade\n57000 Ville"}
+          className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
+      </Champ>
+
+      <Champ label="Heure du rendez-vous">
+        <input type="time" value={plateau.heureRdv || ""} onChange={maj("heureRdv")}
           className="w-full border rounded-md px-3 py-2 text-sm" style={styleInput} />
       </Champ>
 
@@ -2748,6 +2796,330 @@ function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erre
           style={{ borderColor: C.ligne, color: C.ink70 }}>Annuler</button>
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Convocation — l'image envoyée aux parents sur WhatsApp en milieu   */
+/*  de semaine : une colonne par plateau, une sous-colonne par équipe. */
+/*  Prénoms seulement : ni licence ni date de naissance.               */
+/* ------------------------------------------------------------------ */
+const ABREVIATION_NIVEAU = { "Niveau 2": "N2" };
+
+/* « 2026-09-26 » → « 26/09/26 » */
+const dateCourte = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
+
+/* « 09:30 » → « 9 H 30 » */
+const heureRdv = (hhmm) => {
+  if (!hhmm) return "";
+  const [h, m] = hhmm.split(":");
+  return `${Number(h)} H ${m}`;
+};
+
+/* Ce que montre l'image, sans rien dessiner. Deux convoqués au même prénom
+   se distinguent par l'initiale du nom et la catégorie : « JULES D U9 ». */
+function modeleConvocation(feuilles, personneDe, tenue) {
+  const convoques = feuilles.flatMap((f) =>
+    f.equipes.flatMap((e) => e.joueurs.map(personneDe).filter(Boolean)));
+  const parPrenom = {};
+  convoques.forEach((j) => {
+    const k = sansAccent(j.prenom || j.nom);
+    parPrenom[k] = (parPrenom[k] || 0) + 1;
+  });
+  const appel = (j) => {
+    const prenom = (j.prenom || j.nom).toUpperCase();
+    return parPrenom[sansAccent(j.prenom || j.nom)] > 1
+      ? `${prenom} ${j.nom.charAt(0).toUpperCase()} ${j.categorie}`
+      : prenom;
+  };
+
+  const plateaux = feuilles.map(({ plateau, equipes }) => ({
+    titre: `${plateau.type} ${ABREVIATION_NIVEAU[plateau.niveau] || plateau.niveau}`.toUpperCase(),
+    lieu: (plateau.lieu || "").toUpperCase(),
+    adresse: (plateau.adresse || "").toUpperCase(),
+    heure: heureRdv(plateau.heureRdv),
+    equipes: equipes.map((e) => {
+      const d = e.delegueId ? personneDe(e.delegueId) : null;
+      return {
+        joueurs: e.joueurs.map(personneDe).filter(Boolean).map(appel),
+        educateur: d ? (d.prenom || d.nom).toUpperCase() : "",
+      };
+    }),
+  }));
+  const dates = [...new Set(feuilles.map((f) => f.plateau.date).filter(Boolean))];
+  return {
+    date: dates.map(dateCourte).join(" / "),
+    plateaux,
+    lignes: Math.max(1, ...plateaux.flatMap((p) => p.equipes.map((e) => e.joueurs.length))),
+    tenue: tenue || "",
+  };
+}
+
+const COULEURS_CONVOCATION = {
+  fond: "#111111",
+  bleu: "#6E9BD3",
+  blanc: "#FFFFFF",
+  encre: "#111111",
+  rouge: "#FF2A1A",
+  encreRouge: "#1A0000",
+  creme: "#FFF2CC",
+  slogan: "#E0201A",
+};
+
+/* Dessine l'image dans `toile` (un <canvas>), à la manière du tableau fait
+   jusqu'ici à la main : cases séparées par un épais quadrillage noir. */
+function dessinerConvocation(toile, m) {
+  const K = COULEURS_CONVOCATION;
+  const L_LIBELLE = 300;
+  const L_COLONNE = 250;
+  const JOINT = 7;
+  const police = (t) => `bold ${t}px "Times New Roman", Times, serif`;
+  const colonnes = m.plateaux.reduce((n, p) => n + p.equipes.length, 0);
+  const largeur = L_LIBELLE + colonnes * L_COLONNE + JOINT;
+
+  const mesure = toile.getContext("2d");
+  const coupe = (texte, taille, maxi) => {
+    mesure.font = police(taille);
+    return String(texte || "").split("\n").flatMap((para) => {
+      const lignes = [];
+      let courante = "";
+      para.split(/\s+/).filter(Boolean).forEach((mot) => {
+        const essai = courante ? `${courante} ${mot}` : mot;
+        if (courante && mesure.measureText(essai).width > maxi) { lignes.push(courante); courante = mot; }
+        else courante = essai;
+      });
+      lignes.push(courante);
+      return lignes;
+    });
+  };
+
+  const lignesAdresse = Math.max(1, ...m.plateaux.map((p) =>
+    coupe(p.adresse, 30, p.equipes.length * L_COLONNE - 40).length));
+  const lignesTenue = coupe(m.tenue, 30, colonnes * L_COLONNE - 40).length;
+  const rangees = [
+    { cle: "date", h: 70 },
+    { cle: "equipes", h: 70 },
+    { cle: "lieu", h: 72 },
+    { cle: "adresse", h: Math.max(130, lignesAdresse * 38 + 36) },
+    { cle: "rdv", h: 70 },
+    { cle: "titre", h: 76 },
+    ...Array.from({ length: m.lignes }, (_, i) => ({ cle: "joueur", i, h: 60 })),
+    { cle: "educateurs", h: 90 },
+    { cle: "tenue", h: Math.max(96, lignesTenue * 38 + 30) },
+    { cle: "slogan", h: 110 },
+  ];
+  toile.width = largeur;
+  toile.height = rangees.reduce((n, r) => n + r.h, 0) + JOINT;
+
+  const ctx = toile.getContext("2d");
+  ctx.fillStyle = K.fond;
+  ctx.fillRect(0, 0, toile.width, toile.height);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  /* Une case : fond, puis le texte centré, réduit s'il déborde. */
+  const caseTexte = (x, y, l, h, fond, texte, { taille = 32, couleur = K.encre, retour = false } = {}) => {
+    ctx.fillStyle = fond;
+    ctx.fillRect(x + JOINT, y + JOINT, l - JOINT, h - JOINT);
+    if (!texte) return;
+    const maxi = l - JOINT - 24;
+    let t = taille;
+    let lignes = retour ? coupe(texte, t, maxi) : [texte];
+    ctx.font = police(t);
+    while (t > 14 && lignes.some((s) => ctx.measureText(s).width > maxi)) {
+      t -= 1;
+      ctx.font = police(t);
+      if (retour) lignes = coupe(texte, t, maxi);
+    }
+    ctx.fillStyle = couleur;
+    const pas = t * 1.2;
+    const y0 = y + JOINT + (h - JOINT) / 2 - ((lignes.length - 1) * pas) / 2;
+    lignes.forEach((s, i) => ctx.fillText(s, x + JOINT + (l - JOINT) / 2, y0 + i * pas));
+  };
+
+  /* Une rangée : le libellé à gauche, puis une case par plateau ou par équipe. */
+  const parPlateau = (y, h, fond, texteDe, options) => {
+    let x = L_LIBELLE;
+    m.plateaux.forEach((p) => {
+      const l = p.equipes.length * L_COLONNE;
+      caseTexte(x, y, l, h, fond, texteDe(p), options);
+      x += l;
+    });
+  };
+  const parEquipe = (y, h, fond, texteDe, options) => {
+    let x = L_LIBELLE;
+    m.plateaux.forEach((p) => p.equipes.forEach((e) => {
+      caseTexte(x, y, L_COLONNE, h, fond, texteDe(e), options);
+      x += L_COLONNE;
+    }));
+  };
+  const toute = colonnes * L_COLONNE;
+
+  let y = 0;
+  rangees.forEach((r) => {
+    const { h } = r;
+    switch (r.cle) {
+      case "date":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, "DATE");
+        caseTexte(L_LIBELLE, y, toute, h, K.blanc, m.date);
+        break;
+      case "equipes":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, "EQUIPES");
+        parPlateau(y, h, K.bleu, (p) => p.titre);
+        break;
+      case "lieu":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, "LIEU DU PLATEAU", { taille: 26 });
+        parPlateau(y, h, K.blanc, (p) => p.lieu, { taille: 38 });
+        break;
+      case "adresse":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, "ADRESSE DU\nPLATEAU", { retour: true });
+        parPlateau(y, h, K.blanc, (p) => p.adresse, { taille: 30, retour: true });
+        break;
+      case "rdv":
+        caseTexte(0, y, L_LIBELLE, h, K.rouge, "HEURE DU RDV", { couleur: K.encreRouge });
+        parPlateau(y, h, K.rouge, (p) => p.heure, { couleur: K.encreRouge });
+        break;
+      case "titre":
+        caseTexte(0, y, L_LIBELLE + toute, h, K.bleu, "JOUEURS CONVOQUÉS");
+        break;
+      case "joueur":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, String(r.i + 1), { taille: 28 });
+        parEquipe(y, h, K.blanc, (e) => e.joueurs[r.i] || "", { taille: 28 });
+        break;
+      case "educateurs":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, "EDUCATEURS");
+        parEquipe(y, h, K.bleu, (e) => e.educateur, { taille: 34 });
+        break;
+      case "tenue":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, "TENUES");
+        caseTexte(L_LIBELLE, y, toute, h, K.bleu, m.tenue, { taille: 30, retour: true });
+        break;
+      case "slogan":
+        caseTexte(0, y, L_LIBELLE + toute, h, K.creme, "RESPECT DES HORAIRES DU RENDEZ-VOUS",
+          { taille: 38, couleur: K.slogan });
+        break;
+      default:
+    }
+    y += h;
+  });
+}
+
+function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
+  const [image, setImage] = useState(null);
+  const [message, setMessage] = useState(null);
+
+  const modele = useMemo(
+    () => modeleConvocation(feuilles, personneDe, tenue),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feuilles, personneDe, tenue]
+  );
+
+  /* L'image est prête avant le toucher sur « Partager » : le téléphone
+     n'ouvre sa feuille de partage que dans la foulée d'un geste. */
+  useEffect(() => {
+    let annule = false;
+    try {
+      const toile = document.createElement("canvas");
+      if (!toile.getContext("2d")) throw new Error("CANVAS");
+      dessinerConvocation(toile, modele);
+      const apercu = toile.toDataURL("image/png");
+      toile.toBlob((blob) => { if (!annule) setImage({ apercu, blob }); }, "image/png");
+    } catch (e) {
+      setImage(false);
+    }
+    return () => { annule = true; };
+  }, [modele]);
+
+  const nomFichier = `convocation-${feuilles[0]?.plateau.date || "samedi"}.png`;
+
+  const partager = async () => {
+    setMessage(null);
+    if (!image?.blob) {
+      setMessage("L'image n'a pas pu être créée ici. Ouvrez l'application dans le navigateur du téléphone.");
+      return;
+    }
+    const fichier = new File([image.blob], nomFichier, { type: "image/png" });
+    if (navigator.canShare?.({ files: [fichier] })) {
+      try {
+        await navigator.share({ files: [fichier], title: "Convocation" });
+        suivi("convocation/partagee");
+      } catch (e) {
+        if (e.name !== "AbortError") setMessage("Le partage a échoué. Réessayez, ou téléchargez l'image.");
+      }
+      return;
+    }
+    const url = URL.createObjectURL(image.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nomFichier;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setMessage("Image téléchargée. Envoyez-la sur le groupe WhatsApp des parents.");
+    suivi("convocation/telechargee");
+  };
+
+  const problemes = [];
+  feuilles.forEach(({ plateau, equipes }) => {
+    const qui = plateau.niveau;
+    if (!plateau.date) problemes.push(`${qui} : la date n'est pas renseignée.`);
+    if (!plateau.lieu) problemes.push(`${qui} : le lieu n'est pas renseigné.`);
+    if (!plateau.adresse) problemes.push(`${qui} : l'adresse n'est pas renseignée.`);
+    if (!plateau.heureRdv) problemes.push(`${qui} : l'heure du rendez-vous n'est pas renseignée.`);
+    equipes.forEach((e) => {
+      if (!e.joueurs.length) problemes.push(`${e.nom} : aucun joueur convoqué.`);
+      if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
+    });
+  });
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-semibold">Convocation</h2>
+        <button onClick={partager}
+          className="px-3 py-2 rounded-md text-sm flex items-center gap-1.5"
+          style={{ background: C.terrain, color: "#fff" }}>
+          <Share2 size={15} /> Partager
+        </button>
+      </div>
+      <p className="text-sm mb-4" style={{ color: C.ink70 }}>
+        Tous les plateaux du samedi sur une image, à envoyer aux parents.
+      </p>
+
+      <ChampModifiable label="Tenue" valeur={tenue} defaut={TENUE_DEFAUT} changer={setTenue} />
+
+      {message && (
+        <p className="rounded-lg border p-3 mb-4 text-sm"
+          style={{ borderColor: C.ligne, background: C.papier, color: C.ink70 }}>
+          {message}
+        </p>
+      )}
+
+      {problemes.length > 0 && (
+        <ul className="rounded-lg border p-3 mb-4 text-sm space-y-1"
+          style={{ borderColor: C.brassard, background: "#FBF3E2" }}>
+          {problemes.map((p, i) => (
+            <li key={i} className="flex gap-2">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
+              {p}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.ligne, background: C.papier }}>
+        {image
+          ? <img src={image.apercu} alt="Aperçu de la convocation" className="block w-full h-auto" />
+          : (
+            <p className="p-4 text-sm" style={{ color: C.ink70 }}>
+              {image === false
+                ? "L'aperçu n'est pas disponible dans ce navigateur."
+                : "Préparation de l'image…"}
+            </p>
+          )}
+      </div>
+    </section>
   );
 }
 
