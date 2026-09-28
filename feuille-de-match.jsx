@@ -690,7 +690,7 @@ function feuilleHTML(plateau, equipes, personneDe) {
     <div class="fm">
       <div class="fm-page">
         ${entete}
-        <h3 class="fm-titre">Composition des équipes :</h3>
+        <h3 class="fm-titre">Composition des équipes : ${esc(CLUB.nom)}</h3>
         ${grilleHTML(equipes, 0, personneDe)}
         ${infos}
       </div>
@@ -885,7 +885,7 @@ function pagePremiere(plateau, equipes, personneDe) {
   //p.rouge(false);
   p.image(IMAGES[2], encMil - 56, encT + 48, 112);
 
-  p.centre(A4.l / 2, 186, 14, "F2", "Composition des équipes :");
+  p.centre(A4.l / 2, 186, 14, "F2", `Composition des équipes : ${CLUB.nom}`);
 
   const basGrille = grillePDF(p, equipes, 0, personneDe, 200);
 
