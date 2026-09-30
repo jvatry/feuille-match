@@ -61,12 +61,38 @@ const SEL_PUBLICATION = "feuille-match/publication";
 /* Nouvelle vérification de l'effectif publié pendant l'utilisation. */
 const INTERVALLE_VERIFICATION = 5 * 60 * 1000;
 
-/* Un type de plateau associe les catégories de joueurs qu'il mélange. Pour
-   l'instant un seul type existe (U9 : plateaux U8/U9 du club) ; un futur type
-   U7 (U6/U7, pour un autre club) s'ajouterait ici sans toucher au reste. */
+/* Un type de plateau porte ses règles : catégories de joueurs, effectif
+   d'une équipe, nombre d'équipes, niveaux et encadrement.
+   - U9 : plateaux U8/U9 à 5, plusieurs équipes, un délégué chacune ;
+   - U11 : plateau U10/U11 à 8, une seule équipe de 12 au plus, un
+     capitaine, un dirigeant et un éducateur. */
 const TYPES_PLATEAU = {
-  U9: { label: "U9", categoriesJoueurs: ["U8", "U9"] },
+  U9: {
+    label: "U9",
+    categoriesJoueurs: ["U8", "U9"],
+    minJoueurs: MIN_JOUEURS,
+    maxJoueurs: MAX_JOUEURS,
+    maxEquipes: MAX_EQUIPES,
+    niveaux: ["Niveau 2", "Intersecteur"],
+    encadrement: "delegue",
+    capitaine: false,
+  },
+  U11: {
+    label: "U11",
+    categoriesJoueurs: ["U10", "U11"],
+    minJoueurs: 8,      // football à 8
+    maxJoueurs: 12,
+    maxEquipes: 1,
+    niveaux: ["Intersecteur"],
+    encadrement: "dirigeant-educateur",
+    capitaine: true,
+  },
 };
+
+const reglesDe = (plateau) => TYPES_PLATEAU[plateau.type] || TYPES_PLATEAU.U9;
+
+/* Les rôles d'une équipe qui désignent une personne de l'effectif. */
+const ROLES = ["delegueId", "capitaineId", "dirigeantId", "educateurId"];
 
 /* Tenue rappelée sur la convocation, modifiable au crayon. */
 const TENUE_DEFAUT = "maillot rayé / short bleu-blanc / chaussettes bleues, protège-tibias";
@@ -75,10 +101,16 @@ const TENUE_DEFAUT = "maillot rayé / short bleu-blanc / chaussettes bleues, pro
 const SECTEUR_DEFAUT = "Sidérurgie";
 const GROUPE_DEFAUT = "EST";
 
-/* Le même samedi, le club peut avoir un plateau par niveau : une feuille
-   chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
-const NIVEAUX = ["Niveau 2", "Intersecteur"];
-const MAX_PLATEAUX = NIVEAUX.length;   // un plateau par niveau
+/* Le même samedi, le club peut avoir un plateau par type et par niveau :
+   une feuille chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
+const NIVEAUX = TYPES_PLATEAU.U9.niveaux;
+
+/* Les niveaux encore libres pour un type : « + Plateau » reste dans le type
+   du plateau affiché ; on passe en U11 par le bouton du type. */
+function plateauxLibres(feuilles, type) {
+  const pris = feuilles.filter((f) => f.plateau.type === type).map((f) => f.plateau.niveau);
+  return TYPES_PLATEAU[type].niveaux.filter((n) => !pris.includes(n)).map((niveau) => ({ type, niveau }));
+}
 
 const PLATEAU_VIDE = {
   type: "U9",
@@ -93,12 +125,26 @@ const PLATEAU_VIDE = {
   responsable: "",
 };
 
+/* Sans numéro : la seule équipe d'un plateau U11. */
 const equipeVide = (n) => ({
   id: `e${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-  nom: `${CLUB.nom.toUpperCase()} ${n}`,
+  nom: n ? `${CLUB.nom.toUpperCase()} ${n}` : CLUB.nom.toUpperCase(),
   joueurs: [],
   delegueId: null,
+  capitaineId: null,
+  dirigeantId: null,
+  educateurId: null,
 });
+
+/* Une équipe dont la personne `id` n'est plus là (ou change d'identifiant). */
+function remplacerPersonne(e, id, nouvelId = null) {
+  const joueurs = nouvelId
+    ? e.joueurs.map((i) => (i === id ? nouvelId : i))
+    : e.joueurs.filter((i) => i !== id);
+  const suite = { ...e, joueurs };
+  ROLES.forEach((r) => { if (e[r] === id) suite[r] = nouvelId; });
+  return suite;
+}
 
 /* Un plateau préparé : ses informations et ses équipes. */
 const feuilleVide = (plateau, equipes) => ({
@@ -120,12 +166,16 @@ function reprendrePlateau(p) {
     ...PLATEAU_VIDE,
     ...p,
     type,
-    niveau: NIVEAUX.includes(p.niveau) ? p.niveau : NIVEAUX[0],
+    niveau: TYPES_PLATEAU[type].niveaux.includes(p.niveau) ? p.niveau : TYPES_PLATEAU[type].niveaux[0],
     secteur: (!ancien && p.secteur) || SECTEUR_DEFAUT,
     groupe: (!ancien && p.groupe) || GROUPE_DEFAUT,
     defautsClub: true,
   };
 }
+
+/* Le nom d'un plateau : « Niveau 2 » en U9, « U11 Intersecteur » sinon. */
+const nomNiveau = (plateau) =>
+  plateau.type === "U9" ? plateau.niveau : `${plateau.type} ${plateau.niveau}`;
 
 /* « Niveau 2 — Garche · 26/09 · 2 éq. · 13 j. » */
 function resumePlateau(f) {
@@ -136,7 +186,7 @@ function resumePlateau(f) {
     `${f.equipes.length} éq.`,
     `${joueurs} j.`,
   ].filter(Boolean);
-  return `${f.plateau.niveau} — ${details.join(" · ")}`;
+  return `${nomNiveau(f.plateau)} — ${details.join(" · ")}`;
 }
 
 /* Où joue quelqu'un : le nom de l'équipe, précédé du niveau quand c'est
@@ -1084,7 +1134,10 @@ export default function App() {
     });
 
   /* Les équipes sont numérotées à la suite d'un plateau à l'autre. */
-  const numeroSuivant = () => feuilles.reduce((n, f) => n + f.equipes.length, 0) + 1;
+  const numeroSuivant = (type = "U9") =>
+    type === "U9"
+      ? feuilles.filter((f) => f.plateau.type === "U9").reduce((n, f) => n + f.equipes.length, 0) + 1
+      : 0;
   const [onglet, setOnglet] = useState("effectif");
   const [pret, setPret] = useState(false);
   const [etatEffectif, setEtatEffectif] = useState("chargement");
@@ -1302,14 +1355,15 @@ export default function App() {
     if (!pret || !effectif.length) return;
     const ids = new Set(effectif.map((p) => p.id));
     toutesEquipes((prev) => {
+      const absent = (i) => i && !ids.has(i);
       const orphelin = prev.some((e) =>
-        e.joueurs.some((i) => !ids.has(i)) || (e.delegueId && !ids.has(e.delegueId)));
+        e.joueurs.some(absent) || ROLES.some((r) => absent(e[r])));
       if (!orphelin) return prev;
-      return prev.map((e) => ({
-        ...e,
-        joueurs: e.joueurs.filter((i) => ids.has(i)),
-        delegueId: ids.has(e.delegueId) ? e.delegueId : null,
-      }));
+      return prev.map((e) => {
+        const suite = { ...e, joueurs: e.joueurs.filter((i) => ids.has(i)) };
+        ROLES.forEach((r) => { if (absent(e[r])) suite[r] = null; });
+        return suite;
+      });
     });
   }, [effectif, pret]);
 
@@ -1363,9 +1417,11 @@ export default function App() {
     const joue = {};
     const delegue = {};
     feuilles.forEach((f) => f.equipes.forEach((e) => {
-      const place = { equipe: e, feuilleId: f.id, niveau: f.plateau.niveau };
+      const place = { equipe: e, feuilleId: f.id, niveau: nomNiveau(f.plateau) };
       e.joueurs.forEach((id) => { joue[id] = place; });
-      if (e.delegueId) delegue[e.delegueId] = [...(delegue[e.delegueId] || []), place];
+      ["delegueId", "dirigeantId", "educateurId"].forEach((r) => {
+        if (e[r]) delegue[e[r]] = [...(delegue[e[r]] || []), place];
+      });
     }));
     return { affectation: joue, delegations: delegue };
   }, [feuilles]);
@@ -1380,11 +1436,12 @@ export default function App() {
         equipes: f.equipes.map((e) => {
           if (e.id !== equipeId) return e;
           const dejaIci = e.joueurs.includes(joueurId);
-          if (!dejaIci && e.joueurs.length >= MAX_JOUEURS) return e;
-          return {
-            ...e,
-            joueurs: dejaIci ? e.joueurs.filter((i) => i !== joueurId) : [...e.joueurs, joueurId],
-          };
+          if (!dejaIci && e.joueurs.length >= reglesDe(f.plateau).maxJoueurs) return e;
+          /* Retiré de l'équipe, il n'en est plus le capitaine. */
+          return dejaIci
+            ? { ...e, joueurs: e.joueurs.filter((i) => i !== joueurId),
+                capitaineId: e.capitaineId === joueurId ? null : e.capitaineId }
+            : { ...e, joueurs: [...e.joueurs, joueurId] };
         }),
       }));
     });
@@ -1394,8 +1451,8 @@ export default function App() {
     setEquipes((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 
   const ajouterEquipe = () => {
-    if (equipes.length >= MAX_EQUIPES) return;
-    const e = equipeVide(numeroSuivant());
+    if (equipes.length >= reglesDe(plateau).maxEquipes) return;
+    const e = equipeVide(numeroSuivant(plateau.type));
     setEquipes((prev) => [...prev, e]);
     setEquipeActive(e.id);
   };
@@ -1411,27 +1468,67 @@ export default function App() {
   };
 
   /* Un plateau de plus pour le même samedi : il reprend les informations
-     communes du plateau affiché et prend le niveau encore libre. */
+     communes du plateau affiché et prend le niveau encore libre de son type. */
   const ajouterPlateau = () => {
-    const pris = feuilles.map((f) => f.plateau.niveau);
-    const libre = NIVEAUX.find((n) => !pris.includes(n));
-    if (feuilles.length >= MAX_PLATEAUX || !libre) return;
+    const [libre] = plateauxLibres(feuilles, plateau.type);
+    if (!libre) return;
     const f = feuilleVide(
       {
         ...PLATEAU_VIDE,
-        type: plateau.type,
-        niveau: libre,
+        type: libre.type,
+        niveau: libre.niveau,
         date: plateau.date,
         secteur: plateau.secteur,
         groupe: plateau.groupe,
         responsable: plateau.responsable,
       },
-      [equipeVide(numeroSuivant())]
+      [equipeVide(numeroSuivant(libre.type))]
     );
     setFeuilles((prev) => [...prev, f]);
     setActive(f.id);
     setEquipeActive(f.equipes[0].id);
     setOnglet("plateau");
+  };
+
+  /* Changer le type du plateau affiché : ce qui ne respecte pas les règles
+     du nouveau type (catégories, nombre de joueurs et d'équipes) est retiré.
+     `bilan` dit ce qui serait perdu, pour demander confirmation. */
+  const changementType = (type) => {
+    const r = TYPES_PLATEAU[type];
+    const autres = feuilles.filter((f) => f.id !== courante.id)
+      .filter((f) => f.plateau.type === type).map((f) => f.plateau.niveau);
+    const niveau = r.niveaux.includes(plateau.niveau) && !autres.includes(plateau.niveau)
+      ? plateau.niveau
+      : r.niveaux.find((n) => !autres.includes(n));
+    const gardees = equipes.slice(0, r.maxEquipes);
+    let joueursRetires = equipes.slice(r.maxEquipes).reduce((n, e) => n + e.joueurs.length, 0);
+    const suite = gardees.map((e) => {
+      const joueurs = e.joueurs
+        .filter((id) => r.categoriesJoueurs.includes(personneDe(id)?.categorie))
+        .slice(0, r.maxJoueurs);
+      joueursRetires += e.joueurs.length - joueurs.length;
+      return {
+        ...e,
+        /* L'équipe U11 porte le nom du club, sans numéro. */
+        nom: type === "U9" || e.nom !== `${CLUB.nom.toUpperCase()} 1` ? e.nom : CLUB.nom.toUpperCase(),
+        joueurs,
+        capitaineId: r.capitaine && joueurs.includes(e.capitaineId) ? e.capitaineId : null,
+      };
+    });
+    return {
+      possible: Boolean(niveau),
+      niveau,
+      suite,
+      bilan: { joueurs: joueursRetires, equipes: equipes.length - gardees.length },
+    };
+  };
+
+  const changerType = (type) => {
+    const c = changementType(type);
+    if (!c.possible) return;
+    majCourante("plateau", (p) => ({ ...p, type, niveau: c.niveau }));
+    setEquipes(c.suite);
+    setEquipeActive(c.suite[0]?.id ?? null);
   };
 
   const supprimerPlateau = (id) => {
@@ -1449,7 +1546,7 @@ export default function App() {
     setFeuilles((prev) => prev.map((f) => ({
       ...f,
       plateau: { ...f.plateau, date: "", lieu: "", adresse: "", heureRdv: "", responsable: "" },
-      equipes: f.equipes.map((e) => ({ ...e, joueurs: [] })),
+      equipes: f.equipes.map((e) => ({ ...e, joueurs: [], capitaineId: null })),
     })));
     setViderDemande(false);
     setOnglet("plateau");
@@ -1461,25 +1558,13 @@ export default function App() {
     const nouvelId = idPersonne(fiche.licence, fiche.nom, fiche.prenom);
     setEffectif((prev) => prev.map((p) => (p.id === id ? { ...fiche, id: nouvelId } : p)));
     if (nouvelId === id) return;
-    toutesEquipes((prev) =>
-      prev.map((e) => ({
-        ...e,
-        joueurs: e.joueurs.map((i) => (i === id ? nouvelId : i)),
-        delegueId: e.delegueId === id ? nouvelId : e.delegueId,
-      }))
-    );
+    toutesEquipes((prev) => prev.map((e) => remplacerPersonne(e, id, nouvelId)));
   };
 
   /* Retirer quelqu'un de l'effectif le retire aussi des équipes. */
   const retirerDeLEffectif = (id) => {
     setEffectif((prev) => prev.filter((p) => p.id !== id));
-    toutesEquipes((prev) =>
-      prev.map((e) => ({
-        ...e,
-        joueurs: e.joueurs.filter((i) => i !== id),
-        delegueId: e.delegueId === id ? null : e.delegueId,
-      }))
-    );
+    toutesEquipes((prev) => prev.map((e) => remplacerPersonne(e, id)));
   };
 
   if (!pret) {
@@ -1548,8 +1633,8 @@ export default function App() {
               {feuilles.length > 1 ? `Vider les ${feuilles.length} plateaux ?` : "Vider le plateau ?"}
             </p>
             <p className="mb-2" style={{ color: C.ink70 }}>
-              La date, le lieu, le responsable et les joueurs sont effacés. Les niveaux,
-              les équipes et leurs délégués sont gardés.
+              La date, le lieu, le responsable, les joueurs et les capitaines sont effacés.
+              Les niveaux, les équipes et leur encadrement sont gardés.
             </p>
             <div className="flex gap-2">
               <button onClick={nouveauSamedi} className="px-3 py-1.5 rounded-md text-sm"
@@ -1563,7 +1648,8 @@ export default function App() {
 
       {onglet !== "effectif" && (
         <SelecteurPlateaux feuilles={feuilles} active={courante.id}
-          choisir={choisirPlateau} ajouter={ajouterPlateau} />
+          choisir={choisirPlateau}
+          ajouter={plateauxLibres(feuilles, plateau.type).length ? ajouterPlateau : null} />
       )}
 
       <main className="max-w-3xl mx-auto px-4 py-5">
@@ -1592,7 +1678,9 @@ export default function App() {
           <VuePlateau key={courante.id} plateau={plateau} setPlateau={setPlateau} effectif={effectif}
             allerEffectif={() => setOnglet("effectif")}
             supprimer={feuilles.length > 1 ? () => supprimerPlateau(courante.id) : null}
-            niveauxPris={feuilles.filter((f) => f.id !== courante.id).map((f) => f.plateau.niveau)} />
+            niveauxPris={feuilles.filter((f) => f.id !== courante.id && f.plateau.type === plateau.type)
+              .map((f) => f.plateau.niveau)}
+            changementType={changementType} changerType={changerType} />
         )}
         {onglet === "equipes" && (
           <VueEquipes
@@ -1628,11 +1716,16 @@ export default function App() {
             ))}
           </div>
         )}
-        {onglet === "feuille" && document_ === "feuille" && (
-          <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
-        )}
+        {onglet === "feuille" && document_ === "feuille" && (plateau.type === "U9"
+          ? <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
+          : <FeuilleAVenir plateau={plateau} equipes={equipes} personneDe={personneDe}
+              quoi="La feuille de match U11" />)}
         {onglet === "feuille" && document_ === "convocation" && (
-          <VueConvocation feuilles={feuilles} personneDe={personneDe} tenue={tenue} setTenue={setTenue} />
+          feuilles.some((f) => f.plateau.type === "U9")
+            ? <VueConvocation feuilles={feuilles.filter((f) => f.plateau.type === "U9")}
+                personneDe={personneDe} tenue={tenue} setTenue={setTenue} />
+            : <FeuilleAVenir plateau={plateau} equipes={equipes} personneDe={personneDe}
+                quoi="La convocation U11" />
         )}
         {onglet === "effectif" && (
           <VueEffectif
@@ -2029,11 +2122,25 @@ function ChampModifiable({ label, valeur, defaut, changer }) {
 /* ------------------------------------------------------------------ */
 /*  Vue Plateau                                                        */
 /* ------------------------------------------------------------------ */
-function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, niveauxPris }) {
+function VuePlateau({
+  plateau, setPlateau, effectif, allerEffectif, supprimer, niveauxPris, changementType, changerType,
+}) {
   const maj = (k) => (e) => setPlateau({ ...plateau, [k]: e.target.value });
   const samedi = plateau.date && new Date(plateau.date + "T12:00").getDay() === 6;
   const [suppression, setSuppression] = useState(false);
   const [choixNiveau, setChoixNiveau] = useState(false);
+  const [typeDemande, setTypeDemande] = useState(null);
+  const niveaux = reglesDe(plateau).niveaux;
+
+  /* Un changement de type qui retirerait des joueurs ou des équipes est
+     d'abord confirmé. */
+  const choisirType = (t) => {
+    if (t === plateau.type) return;
+    const c = changementType(t);
+    if (!c.possible) return;
+    if (c.bilan.joueurs || c.bilan.equipes) setTypeDemande({ type: t, ...c.bilan });
+    else changerType(t);
+  };
 
   const choix = (actif) => ({
     borderColor: actif ? C.terrain : C.ligne,
@@ -2048,9 +2155,9 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           plateau par le sélecteur du haut, et de niveau par le crayon. */}
       <div className="flex items-center gap-2 mb-5">
         <h2 className="text-lg font-semibold" style={{ color: C.terrain }}>
-          Plateau {plateau.niveau}
+          Plateau {nomNiveau(plateau)}
         </h2>
-        {!choixNiveau && (
+        {!choixNiveau && niveaux.length > 1 && (
           <button onClick={() => setChoixNiveau(true)} aria-label="Changer le niveau"
             className="p-1.5 rounded-md border" style={{ borderColor: C.ligne, color: C.terrain }}>
             <Pencil size={14} />
@@ -2062,7 +2169,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
         <div className="rounded-lg border p-3 mb-5" style={{ borderColor: C.terrain, background: C.papier }}>
           <p className="text-xs mb-2" style={{ color: C.ink70 }}>Niveau de ce plateau</p>
           <div className="flex flex-wrap gap-2">
-            {NIVEAUX.map((n) => {
+            {niveaux.map((n) => {
               const pris = niveauxPris.includes(n);
               return (
                 <button key={n} disabled={pris}
@@ -2094,13 +2201,37 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
 
       <Champ label="Type de plateau" choix>
         <div className="flex gap-2">
-          {Object.keys(TYPES_PLATEAU).map((t) => (
-            <button key={t} onClick={() => setPlateau({ ...plateau, type: t })}
-              className="px-4 py-2 rounded-md border text-sm" style={choix(plateau.type === t)}>
-              {TYPES_PLATEAU[t].label}
-            </button>
-          ))}
+          {Object.keys(TYPES_PLATEAU).map((t) => {
+            const impossible = t !== plateau.type && !changementType(t).possible;
+            return (
+              <button key={t} onClick={() => choisirType(t)} disabled={impossible}
+                className="px-4 py-2 rounded-md border text-sm"
+                style={{ ...choix(plateau.type === t), opacity: impossible ? 0.45 : 1 }}>
+                {TYPES_PLATEAU[t].label}{impossible ? " — déjà utilisé" : ""}
+              </button>
+            );
+          })}
         </div>
+        {typeDemande && (
+          <div className="rounded-lg border p-3 mt-3 text-sm"
+            style={{ borderColor: C.brassard, background: C.brassardSoft }}>
+            <p className="font-medium mb-1">Passer ce plateau en {typeDemande.type} ?</p>
+            <p className="mb-2" style={{ color: C.ink70 }}>
+              {[
+                typeDemande.joueurs && `${typeDemande.joueurs} joueur${typeDemande.joueurs > 1 ? "s" : ""} qui ne ${typeDemande.joueurs > 1 ? "peuvent" : "peut"} pas y jouer ${typeDemande.joueurs > 1 ? "seront retirés" : "sera retiré"}`,
+                typeDemande.equipes && `${typeDemande.equipes} équipe${typeDemande.equipes > 1 ? "s" : ""} en trop ${typeDemande.equipes > 1 ? "seront supprimées" : "sera supprimée"}`,
+              ].filter(Boolean).join(" ; ")}.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => { changerType(typeDemande.type); setTypeDemande(null); }}
+                className="px-3 py-1.5 rounded-md text-sm" style={{ background: C.terrain, color: "#fff" }}>
+                Changer
+              </button>
+              <button onClick={() => setTypeDemande(null)} className="px-3 py-1.5 rounded-md border text-sm"
+                style={{ borderColor: C.ligne, color: C.ink70, background: C.papier }}>Annuler</button>
+            </div>
+          </div>
+        )}
       </Champ>
 
       <Champ label="Date" aide={plateau.date && !samedi ? "Cette date n'est pas un samedi." : null}>
@@ -2145,7 +2276,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           ) : (
             <div className="rounded-lg border p-3 text-sm"
               style={{ borderColor: C.alerte, background: C.alerteSoft }}>
-              <p className="font-medium mb-2">Supprimer le plateau {plateau.niveau} et ses équipes ?</p>
+              <p className="font-medium mb-2">Supprimer le plateau {nomNiveau(plateau)} et ses équipes ?</p>
               <div className="flex gap-2">
                 <button onClick={supprimer} className="px-3 py-1.5 rounded-md text-sm"
                   style={{ background: C.alerte, color: "#fff" }}>Supprimer</button>
@@ -2180,8 +2311,7 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
             </button>
           );
         })}
-        {feuilles.length < MAX_PLATEAUX &&
-          NIVEAUX.some((n) => !feuilles.some((f) => f.plateau.niveau === n)) && (
+        {ajouter && (
           <button onClick={ajouter}
             className="shrink-0 px-4 py-2.5 rounded-full border border-dashed text-sm flex items-center gap-1 whitespace-nowrap"
             style={{ borderColor: C.terrain, color: C.terrain }}>
@@ -2201,7 +2331,8 @@ function VueEquipes({
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
 }) {
   const [recherche, setRecherche] = useState("");
-  const categoriesJoueurs = TYPES_PLATEAU[plateau.type].categoriesJoueurs;
+  const regles = reglesDe(plateau);
+  const categoriesJoueurs = regles.categoriesJoueurs;
   const [categoriesVisibles, setCategoriesVisibles] = useState(() =>
     Object.fromEntries(categoriesJoueurs.map((c) => [c, true]))
   );
@@ -2277,7 +2408,7 @@ function VueEquipes({
             </button>
           );
         })}
-        {equipes.length < MAX_EQUIPES && (
+        {equipes.length < regles.maxEquipes && (
           <button onClick={ajouterEquipe} className="px-3 py-2 rounded-md border text-sm flex items-center gap-1"
             style={{ borderColor: C.ligne, color: C.ink70 }}>
             <Plus size={14} /> Équipe
@@ -2304,28 +2435,37 @@ function VueEquipes({
               <button onClick={allerEffectif}
                 className="w-full rounded-md border border-dashed px-3 py-2 text-sm text-left mb-3"
                 style={{ borderColor: C.ligne, color: C.ink70 }}>
-                Aucun délégué enregistré — en ajouter dans Effectif
+                Aucun adulte enregistré — en ajouter dans Effectif (catégorie Délégué)
               </button>
-            ) : (
-              <select value={active.delegueId || ""}
-                onChange={(e) => majEquipe(active.id, { delegueId: e.target.value || null })}
+            ) : (regles.encadrement === "delegue" ? [["delegueId", "Délégué"]]
+              : [["dirigeantId", "Dirigeant"], ["educateurId", "Éducateur"]]).map(([role, libelle]) => (
+              <select key={role} value={active[role] || ""} aria-label={libelle}
+                onChange={(e) => majEquipe(active.id, { [role]: e.target.value || null })}
                 className="w-full border rounded-md px-3 py-2 text-sm mb-3" style={styleInput}>
-                <option value="">Délégué — à désigner</option>
+                <option value="">{libelle} — à désigner</option>
                 {delegues.map((d) => {
-                  /* Pas de blocage (un parent peut dépanner), mais on le signale. */
+                  /* Pas de blocage (un parent peut dépanner), mais on le signale ;
+                     une même personne ne tient pas deux rôles dans l'équipe. */
                   const ailleurs = (delegations[d.id] || []).filter((p) => p.equipe.id !== active.id);
+                  const autreRole = ROLES.some((r) => r !== role && r !== "capitaineId" && active[r] === d.id);
                   return (
-                    <option key={d.id} value={d.id}>
+                    <option key={d.id} value={d.id} disabled={autreRole}>
                       {d.nom} {d.prenom}{d.licence ? ` — ${d.licence}` : ""}
                       {d.valide ? "" : " (licence non validée)"}
+                      {autreRole ? " — déjà dans l'encadrement" : ""}
                       {ailleurs.length ? ` — déjà : ${ailleurs.map((p) => nomPlace(p, null)).join(", ")}` : ""}
                     </option>
                   );
                 })}
               </select>
-            )}
+            ))}
 
-            <JaugeEquipe n={active.joueurs.length} />
+            <JaugeEquipe n={active.joueurs.length} regles={regles} />
+            {regles.capitaine && active.joueurs.length > 0 && !active.capitaineId && (
+              <p className="text-xs mt-2" style={{ color: C.brassard }}>
+                Touchez « C » pour désigner le capitaine.
+              </p>
+            )}
 
             {active.joueurs.length > 0 && (
               <ol className="mt-3 pt-3 border-t space-y-1 text-sm" style={{ borderColor: C.ligne }}>
@@ -2340,6 +2480,18 @@ function VueEquipes({
                         <span className="text-xs ml-1.5" style={{ color: C.ink70 }}>{j.categorie}</span>
                       </span>
                       {j.feminine && <BadgeFeminine />}
+                      {regles.capitaine && (
+                        <button onClick={() => majEquipe(active.id, {
+                            capitaineId: active.capitaineId === id ? null : id })}
+                          aria-label={`Capitaine : ${j.prenom} ${j.nom}`}
+                          aria-pressed={active.capitaineId === id}
+                          className="w-6 h-6 rounded-full border text-xs font-bold shrink-0"
+                          style={active.capitaineId === id
+                            ? { background: C.terrain, borderColor: C.terrain, color: "#fff" }
+                            : { borderColor: C.ligne, color: C.ink70 }}>
+                          C
+                        </button>
+                      )}
                       <button onClick={() => basculer(active.id, id)} aria-label="Retirer de l'équipe"
                         style={{ color: C.ink70 }}>
                         <X size={14} />
@@ -2400,7 +2552,7 @@ function VueEquipes({
                   const dans = affectation[j.id];
                   const ici = dans?.equipe.id === active.id;
                   const bloque = dans && !ici;
-                  const complet = !ici && active.joueurs.length >= MAX_JOUEURS;
+                  const complet = !ici && active.joueurs.length >= regles.maxJoueurs;
                   return (
                     <li key={j.id}>
                       <button onClick={() => !bloque && !complet && basculer(active.id, j.id)}
@@ -2450,23 +2602,24 @@ function VueEquipes({
   );
 }
 
-function JaugeEquipe({ n }) {
-  const manque = MIN_JOUEURS - n;
+function JaugeEquipe({ n, regles = TYPES_PLATEAU.U9 }) {
+  const { minJoueurs: mini, maxJoueurs: maxi } = regles;
+  const manque = mini - n;
   const message =
     n === 0
       ? "Aucun joueur"
       : manque > 0
-      ? `Il manque ${manque} joueur${manque > 1 ? "s" : ""} pour jouer à 5`
-      : n === MAX_JOUEURS
-      ? "Équipe au complet (5 + 3 remplaçants)"
-      : `${n} joueurs · ${n - MIN_JOUEURS} remplaçant${n - MIN_JOUEURS > 1 ? "s" : ""}`;
+      ? `Il manque ${manque} joueur${manque > 1 ? "s" : ""} pour jouer à ${mini}`
+      : n === maxi
+      ? `Équipe au complet (${mini} + ${maxi - mini} remplaçants)`
+      : `${n} joueurs · ${n - mini} remplaçant${n - mini > 1 ? "s" : ""}`;
   const couleur = manque > 0 ? C.brassard : C.terrain;
   return (
     <div className="flex items-center gap-2 text-xs" style={{ color: couleur }}>
       <div className="flex gap-1">
-        {Array.from({ length: MAX_JOUEURS }, (_, i) => (
-          <span key={i} className="w-4 h-1.5 rounded-full"
-            style={{ background: i < n ? couleur : C.ligne, opacity: i >= MIN_JOUEURS ? 0.6 : 1 }} />
+        {Array.from({ length: maxi }, (_, i) => (
+          <span key={i} className={`${maxi > 8 ? "w-3" : "w-4"} h-1.5 rounded-full`}
+            style={{ background: i < n ? couleur : C.ligne, opacity: i >= mini ? 0.6 : 1 }} />
         ))}
       </div>
       {message}
@@ -3325,6 +3478,56 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
 /* ------------------------------------------------------------------ */
 /*  Feuille de match — aperçu en iframe, impression depuis l'iframe    */
 /* ------------------------------------------------------------------ */
+/* Ce qui manque avant d'imprimer la feuille, selon les règles du type. */
+function problemesFeuille(plateau, equipes, personneDe) {
+  const r = reglesDe(plateau);
+  const problemes = [];
+  if (!plateau.lieu) problemes.push("Le lieu du plateau n'est pas renseigné.");
+  if (!plateau.date) problemes.push("La date du plateau n'est pas renseignée.");
+  equipes.forEach((e) => {
+    if (e.joueurs.length < r.minJoueurs)
+      problemes.push(`${e.nom} : ${e.joueurs.length} joueur(s), il en faut au moins ${r.minJoueurs}.`);
+    if (e.joueurs.length > r.maxJoueurs)
+      problemes.push(`${e.nom} : ${e.joueurs.length} joueurs, ${r.maxJoueurs} au plus.`);
+    if (r.encadrement === "delegue") {
+      if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
+    } else {
+      if (!e.dirigeantId) problemes.push(`${e.nom} : dirigeant non désigné.`);
+      if (!e.educateurId) problemes.push(`${e.nom} : éducateur non désigné.`);
+    }
+    if (r.capitaine && !e.capitaineId) problemes.push(`${e.nom} : capitaine non désigné.`);
+    e.joueurs.forEach((id) => {
+      const j = personneDe(id);
+      if (j && !j.valide) problemes.push(`${j.nom} ${j.prenom} : licence non validée.`);
+    });
+  });
+  return problemes;
+}
+
+/* En attendant la feuille et la convocation U11 : ce qui manque déjà. */
+function FeuilleAVenir({ plateau, equipes, personneDe, quoi }) {
+  const problemes = problemesFeuille(plateau, equipes, personneDe);
+  return (
+    <section>
+      <p className="rounded-lg border p-3 mb-4 text-sm"
+        style={{ borderColor: C.ligne, background: C.papier, color: C.ink70 }}>
+        {quoi} arrive dans une prochaine mise à jour. La composition est déjà enregistrée.
+      </p>
+      {problemes.length > 0 && (
+        <ul className="rounded-lg border p-3 mb-4 text-sm space-y-1"
+          style={{ borderColor: C.brassard, background: C.brassardSoft }}>
+          {problemes.map((p, i) => (
+            <li key={i} className="flex gap-2">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: C.brassard }} />
+              {p}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function VueFeuille({ plateau, equipes, personneDe }) {
   const cadre = useRef(null);
   const [hauteur, setHauteur] = useState(600);
@@ -3367,18 +3570,7 @@ function VueFeuille({ plateau, equipes, personneDe }) {
     }
   };
 
-  const problemes = [];
-  if (!plateau.lieu) problemes.push("Le lieu du plateau n'est pas renseigné.");
-  if (!plateau.date) problemes.push("La date du plateau n'est pas renseignée.");
-  equipes.forEach((e) => {
-    if (e.joueurs.length < MIN_JOUEURS)
-      problemes.push(`${e.nom} : ${e.joueurs.length} joueur(s), il en faut au moins ${MIN_JOUEURS}.`);
-    if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
-    e.joueurs.forEach((id) => {
-      const j = personneDe(id);
-      if (j && !j.valide) problemes.push(`${j.nom} ${j.prenom} : licence non validée.`);
-    });
-  });
+  const problemes = problemesFeuille(plateau, equipes, personneDe);
 
   return (
     <section>
