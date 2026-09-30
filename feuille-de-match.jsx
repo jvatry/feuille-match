@@ -33,6 +33,9 @@ const MIN_JOUEURS = 5;   // 4 joueurs de champ + 1 gardien
 const MAX_JOUEURS = 8;   // + 3 remplaçants
 const MAX_EQUIPES = 8;   // la feuille du district : 4 blocs par page, sur deux pages
 const DELEGUE = "Délégué";
+/* Catégories de joueurs connues de l'effectif, commun à tout le club ; chaque
+   type de plateau choisit les siennes. Les adultes sont « Délégué ». */
+const CATEGORIES = ["U8", "U9", "U10", "U11"];
 
 const CLE_EFFECTIF = "feuilles:effectif";
 const CLE_PLATEAU = "feuilles:plateau";     // ancienne version : un seul plateau, relu une fois
@@ -147,6 +150,19 @@ const enSlug = (s) =>
 
 const estDelegue = (p) => p.categorie === DELEGUE;
 
+/* « U10 », « u 11 », « Délégué »… ; un ancien export qui ne dit que
+   « 9 » reste U9, et tout le reste U8 comme avant. */
+function lireCategorie(texte) {
+  const brut = sansAccent(texte);
+  if (brut.includes("deleg")) return DELEGUE;
+  const u = brut.match(/u\s*(\d{1,2})\b/);
+  if (u && CATEGORIES.includes(`U${Number(u[1])}`)) return `U${Number(u[1])}`;
+  return brut.includes("9") ? "U9" : "U8";
+}
+
+/* Colonne « Sexe » : F, Féminin, Fille… ; absente ou autre : non. */
+const lireFeminine = (texte) => sansAccent(texte).startsWith("f");
+
 const parNom = (a, b) =>
   a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr");
 
@@ -163,13 +179,14 @@ const clePersonne = (p) => idPersonne(p.licence, p.nom, p.prenom);
 /* ------------------------------------------------------------------ */
 /*  CSV                                                                */
 /* ------------------------------------------------------------------ */
-const COLONNES = ["Nom", "Prénom", "Catégorie", "Licence", "Naissance", "Licence validée"];
+const COLONNES = ["Nom", "Prénom", "Catégorie", "Licence", "Naissance", "Licence validée", "Sexe"];
 
 const EXEMPLE_CSV = [
-  "Nom;Prénom;Catégorie;Licence;Naissance;Licence validée",
-  "DUPONT;Lucas;U8;9600000001;14/03/2019;oui",
-  "MARTIN;Elsa;U9;9600000002;02/11/2018;oui",
-  "BERNARD;Claire;Délégué;9600000003;;oui",
+  "Nom;Prénom;Catégorie;Licence;Naissance;Licence validée;Sexe",
+  "DUPONT;Lucas;U8;9600000001;14/03/2019;oui;M",
+  "MARTIN;Elsa;U9;9600000002;02/11/2018;oui;F",
+  "PETIT;Léo;U11;9600000004;05/05/2016;oui;M",
+  "BERNARD;Claire;Délégué;9600000003;;oui;F",
 ].join("\n");
 
 function echappe(v) {
@@ -181,7 +198,7 @@ function versCSV(effectif) {
   const lignes = [COLONNES.join(";")];
   effectif.forEach((p) => {
     lignes.push(
-      [p.nom, p.prenom, p.categorie, p.licence, p.naissance, p.valide ? "oui" : "non"]
+      [p.nom, p.prenom, p.categorie, p.licence, p.naissance, p.valide ? "oui" : "non", p.feminine ? "F" : "M"]
         .map(echappe)
         .join(";")
     );
@@ -230,8 +247,9 @@ function depuisCSV(texte) {
         licence: premiere.findIndex((t) => t.includes("licence") && !t.includes("valid")),
         naissance: trouve("naissance", "date nais"),
         valide: premiere.findIndex((t) => t.includes("valid") || t.includes("etat")),
+        sexe: trouve("sexe", "genre"),
       }
-    : { nom: 0, prenom: 1, categorie: 2, licence: 3, naissance: 4, valide: 5 };
+    : { nom: 0, prenom: 1, categorie: 2, licence: 3, naissance: 4, valide: 5, sexe: 6 };
 
   const personnes = [];
   const ignorees = [];
@@ -247,8 +265,7 @@ function depuisCSV(texte) {
     }
     if (!nom) { ignorees.push(n + 1); return; }
 
-    const brut = sansAccent(lire(idx.categorie));
-    const categorie = brut.includes("deleg") ? DELEGUE : brut.includes("9") ? "U9" : "U8";
+    const categorie = lireCategorie(lire(idx.categorie));
     const etat = sansAccent(lire(idx.valide));
     const valide = !(etat.includes("non") || etat === "0" || etat === "false");
     const licence = lire(idx.licence).replace(/\s/g, "");
@@ -261,6 +278,7 @@ function depuisCSV(texte) {
       licence,
       naissance: lire(idx.naissance),
       valide,
+      feminine: lireFeminine(lire(idx.sexe)),
     });
   });
 
@@ -457,6 +475,7 @@ function fusion(actuel, personnes) {
 /*  Changements entre deux versions de l'effectif                      */
 /* ------------------------------------------------------------------ */
 const CHAMPS_FICHE = ["nom", "prenom", "licence", "naissance"];
+const memeSexe = (a, b) => Boolean(a.feminine) === Boolean(b.feminine);
 
 function ecartEffectif(avant, apres) {
   const ancien = new Map(avant.map((p) => [clePersonne(p), p]));
@@ -467,7 +486,7 @@ function ecartEffectif(avant, apres) {
     if (!a) { e.ajoutes.push(p); return; }
     if (!a.valide && p.valide) e.validees.push(p);
     if (a.categorie !== p.categorie) e.categories.push({ personne: p, de: a.categorie });
-    if ((a.valide && !p.valide) || CHAMPS_FICHE.some((c) => (a[c] || "") !== (p[c] || "")))
+    if ((a.valide && !p.valide) || !memeSexe(a, p) || CHAMPS_FICHE.some((c) => (a[c] || "") !== (p[c] || "")))
       e.corriges.push(p);
   });
   ancien.forEach((p, cle) => { if (!nouveau.has(cle)) e.retires.push(p); });
@@ -1735,6 +1754,17 @@ function BandeauNouveautes({ nouveautes, fermer }) {
 }
 
 /* Repérable d'un coup d'œil, dans l'effectif comme dans les équipes. */
+/* Une joueuse : à signaler sur la feuille de match U11. */
+function BadgeFeminine() {
+  return (
+    <span className="text-xs shrink-0 px-1.5 py-0.5 rounded-full font-semibold"
+      title="Féminine" aria-label="Féminine"
+      style={{ background: C.terrainSoft, color: C.terrain }}>
+      F
+    </span>
+  );
+}
+
 function BadgeLicence() {
   return (
     <span className="text-xs shrink-0 px-2 py-0.5 rounded-full font-medium flex items-center gap-1"
@@ -2309,6 +2339,7 @@ function VueEquipes({
                         <span className="font-medium">{j.nom}</span> {j.prenom}
                         <span className="text-xs ml-1.5" style={{ color: C.ink70 }}>{j.categorie}</span>
                       </span>
+                      {j.feminine && <BadgeFeminine />}
                       <button onClick={() => basculer(active.id, id)} aria-label="Retirer de l'équipe"
                         style={{ color: C.ink70 }}>
                         <X size={14} />
@@ -2396,6 +2427,7 @@ function VueEquipes({
                             {j.licence}{j.naissance ? ` · né le ${j.naissance}` : ""}
                           </span>
                         </span>
+                        {j.feminine && <BadgeFeminine />}
                         {!j.valide && <BadgeLicence />}
                         {bloque && (
                           <span className="text-xs shrink-0 text-right" style={{ color: C.ink70 }}>
@@ -2545,10 +2577,10 @@ function VueEffectif({
 
   const compte = (c) => effectif.filter((p) => p.categorie === c).length;
 
-  const ordre = { U8: 0, U9: 1, [DELEGUE]: 2 };
+  const ordre = Object.fromEntries([...CATEGORIES, DELEGUE].map((c, i) => [c, i]));
   const liste = useMemo(
     () => effectif.slice().sort((a, b) =>
-      (ordre[a.categorie] ?? 3) - (ordre[b.categorie] ?? 3) || parNom(a, b)
+      (ordre[a.categorie] ?? 99) - (ordre[b.categorie] ?? 99) || parNom(a, b)
     ),
     [effectif]
   );
@@ -2634,7 +2666,7 @@ function VueEffectif({
 {EXEMPLE_CSV}
             </pre>
             <p className="mt-2">
-              Séparateur point-virgule. La colonne Catégorie accepte U8, U9 ou Délégué.
+              Séparateur point-virgule. La colonne Catégorie accepte U8, U9, U10, U11 ou Délégué ; la colonne Sexe, F ou M.
               L'export produit exactement ce format : exportez une fois pour obtenir le modèle à remplir.
             </p>
           </div>
@@ -2643,13 +2675,13 @@ function VueEffectif({
 
       <div className="flex items-center justify-between mb-3 text-sm">
         <span style={{ color: C.ink70 }}>
-          U8 {compte("U8")} · U9 {compte("U9")} · délégués {compte(DELEGUE)}
+          {CATEGORIES.map((c) => `${c} ${compte(c)}`).join(" · ")} · délégués {compte(DELEGUE)}
         </span>
         <div className="flex gap-3">
           <button onClick={() => {
             setEdition(null);
             setErreurFiche(null);
-            setAjout({ nom: "", prenom: "", categorie: "U8", licence: "", naissance: "", valide: true });
+            setAjout({ nom: "", prenom: "", categorie: "U8", licence: "", naissance: "", valide: true, feminine: false });
           }}
             className="flex items-center gap-1" style={{ color: C.terrain }}>
             <Plus size={14} /> Ajouter
@@ -2748,6 +2780,7 @@ function VueEffectif({
                     {affectation[p.id] ? ` · ${nomPlace(affectation[p.id], null)}` : ""}
                   </span>
                 </span>
+                {p.feminine && <BadgeFeminine />}
                 {!p.valide && <BadgeLicence />}
               </button>
               <button onClick={() => retirer(p.id)} aria-label="Retirer" style={{ color: C.ink70 }}>
@@ -2867,14 +2900,18 @@ function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erre
           className="border rounded-md px-3 py-2 text-sm" style={styleInput} />
         <select value={valeur.categorie} onChange={maj("categorie")}
           className="border rounded-md px-3 py-2 text-sm" style={styleInput}>
-          <option value="U8">U8</option>
-          <option value="U9">U9</option>
+          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
           <option value={DELEGUE}>{DELEGUE}</option>
         </select>
         <label className="flex items-center gap-2 text-sm px-1">
           <input type="checkbox" checked={valeur.valide}
             onChange={(e) => setValeur({ ...valeur, valide: e.target.checked })} />
           Licence validée
+        </label>
+        <label className="flex items-center gap-2 text-sm px-1">
+          <input type="checkbox" checked={Boolean(valeur.feminine)}
+            onChange={(e) => setValeur({ ...valeur, feminine: e.target.checked })} />
+          Féminine
         </label>
       </div>
       {erreur && <p className="text-xs mb-2" style={{ color: C.alerte }}>{erreur}</p>}
