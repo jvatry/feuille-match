@@ -177,11 +177,10 @@ function reprendrePlateau(p) {
   };
 }
 
-/* Le nom d'un plateau : « Niveau 2 » en U9, « U11 Intersecteur » sinon. */
-const nomNiveau = (plateau) =>
-  plateau.type === "U9" ? plateau.niveau : `${plateau.type} ${plateau.niveau}`;
+/* Le nom d'un plateau, type compris : « U9 Niveau 2 », « U11 Intersecteur ». */
+const nomNiveau = (plateau) => `${plateau.type} ${plateau.niveau}`;
 
-/* « Niveau 2 — Garche · 26/09 · 2 éq. · 13 j. » */
+/* « U9 Niveau 2 — Garche · 26/09 · 2 éq. · 13 j. » */
 function resumePlateau(f) {
   const joueurs = f.equipes.reduce((n, e) => n + e.joueurs.length, 0);
   const details = [
@@ -194,7 +193,7 @@ function resumePlateau(f) {
 }
 
 /* Où joue quelqu'un : le nom de l'équipe, précédé du niveau quand c'est
-   un autre plateau que `feuilleId` (« Niveau 2 · F.C. HETTANGE-GRANDE 1 »). */
+   un autre plateau que `feuilleId` (« U9 Niveau 2 · F.C. HETTANGE-GRANDE 1 »). */
 const nomPlace = (place, feuilleId) =>
   place.feuilleId === feuilleId ? place.equipe.nom : `${place.niveau} · ${place.equipe.nom}`;
 
@@ -1655,8 +1654,7 @@ export default function App() {
         <SelecteurPlateaux feuilles={feuilles} active={courante.id}
           choisir={choisirPlateau}
           ajouter={plateauxLibres(feuilles, plateau.type).length ? ajouterPlateau : null}
-          typeAjoute={plateauxLibres(feuilles, plateau.type)[0]?.type}
-          typeAffiche={plateau.type} />
+          typeAjoute={plateauxLibres(feuilles, plateau.type)[0]?.type} />
       )}
 
       <main className="max-w-3xl mx-auto px-4 py-5">
@@ -2299,7 +2297,7 @@ function VuePlateau({
 }
 
 /* Sous l'en-tête : une puce par plateau du samedi, et de quoi en ajouter. */
-function SelecteurPlateaux({ feuilles, active, choisir, ajouter, typeAjoute, typeAffiche }) {
+function SelecteurPlateaux({ feuilles, active, choisir, ajouter, typeAjoute }) {
   return (
     <div className="border-b" style={{ borderColor: C.ligne, background: C.papier }}>
       <div className="max-w-3xl mx-auto px-4 py-2 flex gap-2 overflow-x-auto">
@@ -2322,7 +2320,7 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter, typeAjoute, typ
           <button onClick={ajouter}
             className="shrink-0 px-4 py-2.5 rounded-full border border-dashed text-sm flex items-center gap-1 whitespace-nowrap"
             style={{ borderColor: C.terrain, color: C.terrain }}>
-            <Plus size={15} /> Plateau{typeAjoute && typeAjoute !== typeAffiche ? ` ${typeAjoute}` : ""}
+            <Plus size={15} /> Plateau {typeAjoute}
           </button>
         )}
       </div>
