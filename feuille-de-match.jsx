@@ -105,11 +105,15 @@ const GROUPE_DEFAUT = "EST";
    une feuille chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
 const NIVEAUX = TYPES_PLATEAU.U9.niveaux;
 
-/* Les niveaux encore libres pour un type : « + Plateau » reste dans le type
-   du plateau affiché ; on passe en U11 par le bouton du type. */
-function plateauxLibres(feuilles, type) {
-  const pris = feuilles.filter((f) => f.plateau.type === type).map((f) => f.plateau.niveau);
-  return TYPES_PLATEAU[type].niveaux.filter((n) => !pris.includes(n)).map((niveau) => ({ type, niveau }));
+/* Les couples type + niveau encore libres, ceux du type `prefere` d'abord :
+   « + Plateau » ajoute un plateau du type affiché tant qu'il en reste, puis
+   propose l'autre type (« + Plateau U11 »). */
+function plateauxLibres(feuilles, prefere) {
+  const pris = new Set(feuilles.map((f) => `${f.plateau.type}|${f.plateau.niveau}`));
+  const types = [prefere, ...Object.keys(TYPES_PLATEAU).filter((t) => t !== prefere)];
+  return types.flatMap((type) => TYPES_PLATEAU[type].niveaux
+    .filter((niveau) => !pris.has(`${type}|${niveau}`))
+    .map((niveau) => ({ type, niveau })));
 }
 
 const PLATEAU_VIDE = {
@@ -1468,7 +1472,8 @@ export default function App() {
   };
 
   /* Un plateau de plus pour le même samedi : il reprend les informations
-     communes du plateau affiché et prend le niveau encore libre de son type. */
+     communes du plateau affiché et prend le premier type + niveau libre,
+     du type affiché de préférence. */
   const ajouterPlateau = () => {
     const [libre] = plateauxLibres(feuilles, plateau.type);
     if (!libre) return;
@@ -1649,7 +1654,9 @@ export default function App() {
       {onglet !== "effectif" && (
         <SelecteurPlateaux feuilles={feuilles} active={courante.id}
           choisir={choisirPlateau}
-          ajouter={plateauxLibres(feuilles, plateau.type).length ? ajouterPlateau : null} />
+          ajouter={plateauxLibres(feuilles, plateau.type).length ? ajouterPlateau : null}
+          typeAjoute={plateauxLibres(feuilles, plateau.type)[0]?.type}
+          typeAffiche={plateau.type} />
       )}
 
       <main className="max-w-3xl mx-auto px-4 py-5">
@@ -2292,7 +2299,7 @@ function VuePlateau({
 }
 
 /* Sous l'en-tête : une puce par plateau du samedi, et de quoi en ajouter. */
-function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
+function SelecteurPlateaux({ feuilles, active, choisir, ajouter, typeAjoute, typeAffiche }) {
   return (
     <div className="border-b" style={{ borderColor: C.ligne, background: C.papier }}>
       <div className="max-w-3xl mx-auto px-4 py-2 flex gap-2 overflow-x-auto">
@@ -2315,7 +2322,7 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
           <button onClick={ajouter}
             className="shrink-0 px-4 py-2.5 rounded-full border border-dashed text-sm flex items-center gap-1 whitespace-nowrap"
             style={{ borderColor: C.terrain, color: C.terrain }}>
-            <Plus size={15} /> Plateau
+            <Plus size={15} /> Plateau{typeAjoute && typeAjoute !== typeAffiche ? ` ${typeAjoute}` : ""}
           </button>
         )}
       </div>
