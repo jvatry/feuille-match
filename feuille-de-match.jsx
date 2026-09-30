@@ -715,7 +715,146 @@ function grilleHTML(equipes, page, personneDe) {
     </tbody></table>`;
 }
 
+const CSS_U11 = `
+  .u11 { font-family: "Times New Roman", Times, serif; color: #000; }
+  .u11 i, .u11 .bi { font-style: italic; }
+  .u11 .bi { font-weight: bold; }
+  .u11 .s { text-decoration: underline; }
+  .u11-haut { display: grid; grid-template-columns: 24mm 1fr 62mm; grid-template-rows: auto auto;
+              column-gap: 3mm; align-items: center; margin-bottom: 5mm; }
+  .u11-haut .district { grid-row: 1 / 3; width: 22mm; }
+  .u11-haut .fff { grid-column: 2 / 4; text-align: center; font-size: 10pt; }
+  .u11-haut .dist { font-size: 16pt; font-weight: bold; display: block; margin-top: 2mm; }
+  .u11-haut .anim { font-size: 10pt; }
+  .u11-haut .titre { font-size: 15pt; font-weight: bold; text-decoration: underline; margin-top: 3mm; }
+  .u11-haut .grandir { width: 60mm; }
+  .u11-cadre { border: 0.8pt solid #000; padding: 2mm 3mm; margin-bottom: 3mm; }
+  .u11-gris { background: #eee; }
+  .u11-imp { text-align: center; font-size: 8.5pt; line-height: 1.5; }
+  .u11-plateau { display: grid; grid-template-columns: 1fr 1fr; row-gap: 4mm; column-gap: 8mm;
+                 font-size: 13pt; padding: 4mm 8mm; }
+  .u11 .val { font-style: normal; font-weight: normal; font-size: 12pt; }
+  .u11 .pts { border-bottom: 1.2pt dotted #000; display: inline-block; min-width: 40mm; }
+  .u11-resp { display: flex; justify-content: space-between; font-size: 11pt; margin: 4mm 0 2mm; }
+  .u11-ligne { border-bottom: 1.2pt dotted #000; height: 6mm; }
+  .u11-oblig { display: grid; grid-template-columns: 38mm 16mm 1fr 36mm 22mm 1fr; row-gap: 2mm;
+               font-size: 11pt; font-style: italic; margin-top: 2mm; }
+  .u11-h { font-size: 13pt; margin: 5mm 0 2mm; }
+  .u11-rouge { color: #c01; font-size: 10pt; }
+  .u11-rencontres { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .u11-rencontres th, .u11-rencontres td { border: 0.8pt solid #000; text-align: center; }
+  .u11-rencontres th { font-style: italic; font-size: 10pt; height: 5mm; }
+  .u11-rencontres td { height: 9.5mm; font-weight: bold; position: relative; }
+  .u11-rencontres .si3 { position: absolute; left: 1mm; bottom: 0.5mm; font-size: 6pt; font-style: italic; }
+  .u11-signatures { display: flex; justify-content: space-between; font-size: 11pt; margin-top: 8mm; }
+  .u11-verso-titre { text-align: center; font-size: 13pt; margin-bottom: 4mm; }
+  .u11-blocs { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm 4mm; }
+  .u11-bloc { border: 1pt solid #000; font-size: 9.5pt; }
+  .u11-bloc table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .u11-bloc td, .u11-bloc th { border: 0.6pt solid #000; height: 5.6mm; padding: 0 1mm;
+                               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .u11-bloc th { font-style: italic; }
+  .u11-bloc .num { width: 6mm; text-align: center; font-style: italic; font-weight: bold; }
+  .u11-bloc .rond { display: inline-block; width: 4.6mm; height: 4.6mm; line-height: 4.6mm;
+                    border: 0.9pt solid #000; border-radius: 50%; }
+  .u11-bloc .lic, .u11-bloc .cat { text-align: center; }
+  .u11-bloc .cat { width: 7mm; font-size: 7.5pt; }
+  .u11-bloc .pied td { font-size: 9pt; }
+  .u11-bloc .bi { white-space: nowrap; }
+`;
+
+/* Aperçu de la feuille U11 : même contenu que le PDF (pageU11Recto / Verso). */
+function feuilleU11HTML(plateau, equipes, personneDe) {
+  const valeur = (v) => (v ? `<span class="val">${esc(v)}</span>` : `<span class="pts"></span>`);
+  const tableRencontres = (lignes, si3) => `
+    <table class="u11-rencontres">
+      <colgroup>${U11.colonnesRencontres.map(([, l]) => `<col style="width:${l}pt">`).join("")}</colgroup>
+      <tr>${U11.colonnesRencontres.map(([n]) => `<th class="bi">${esc(n)}</th>`).join("")}</tr>
+      ${Array.from({ length: lignes }, (_, i) => `<tr><td>–${si3 && i === lignes - 1 ? '<span class="si3">Si 3 équipes</span>' : ""}</td>
+        <td>–</td><td></td><td></td><td></td></tr>`).join("")}
+    </table>`;
+
+  const bloc = (n, e) => {
+    const lignes = Array.from({ length: 12 }, (_, i) => {
+      const j = e ? personneDe(e.joueurs[i]) : null;
+      const num = j?.feminine ? `<span class="rond">${i + 1}</span>` : String(i + 1);
+      return `<tr><td class="num">${num}</td><td>${j ? `${esc(j.nom)} ${esc(j.prenom)}` : ""}</td>
+        <td class="lic">${esc(j?.licence || "")}</td><td class="cat">${esc(j?.categorie || "")}</td></tr>`;
+    }).join("");
+    const qui = (id) => (e && id ? personneDe(id) : null);
+    const pied = (label, x, avecLicence) => `<tr class="pied"><td colspan="4">
+      <span class="bi">${label}</span> ${x ? `${esc(x.nom)} ${esc(x.prenom)}` : ""}
+      ${avecLicence ? `<span style="float:right;width:47%"><span class="bi">N° lic.</span> ${esc(x?.licence || "")}</span>` : ""}
+      </td></tr>`;
+    return `<div class="u11-bloc"><table>
+      <colgroup><col style="width:6mm"><col style="width:45%"><col><col style="width:7mm"></colgroup>
+      <tr><td colspan="4"><span class="bi">Nom de l'équipe ${n} :</span> <b>${esc(e?.nom || "")}</b></td></tr>
+      <tr><th></th><th class="bi">Nom et Prénom</th><th class="bi">N° de licence</th><th class="bi cat">Cat.</th></tr>
+      ${lignes}
+      ${pied("Capitaine :", qui(e?.capitaineId), false)}
+      ${pied("Dirigeant :", qui(e?.dirigeantId), true)}
+      ${pied("Educateur :", qui(e?.educateurId), true)}
+    </table></div>`;
+  };
+
+  return `
+    <style>${CSS_U11}</style>
+    <div class="fm u11">
+      <div class="fm-page">
+        <div class="u11-haut">
+          <img class="district" src="${jpeg(IMG_DISTRICT)}" alt="District Mosellan de Football">
+          <div class="fff">FEDERATION FRANÇAISE DE FOOTBALL – LIGUE DU GRAND EST
+            <span class="dist">DISTRICT MOSELLAN DE FOOTBALL</span></div>
+          <div><div class="anim">FOOTBALL D'ANIMATION</div><div class="titre">Feuille de match U11</div></div>
+          <img class="grandir" src="${jpeg(IMG_GRANDIR)}" alt="Football des enfants — Jouer pour grandir">
+        </div>
+        <div class="u11-cadre u11-gris u11-imp">
+          <span class="bi"><span class="s">Important :</span> ${esc(U11.important1)}</span><br>
+          <b>${esc(U11.important2)}</b>
+        </div>
+        <div class="u11-cadre u11-plateau bi">
+          <div>Secteur : ${valeur(plateau.secteur)}</div><div>Groupe : ${valeur(plateau.groupe)}</div>
+          <div>Date : ${valeur(dateFrancaise(plateau.date))}</div><div>Plateau à : ${valeur(plateau.lieu)}</div>
+        </div>
+        <div class="u11-resp"><i class="s">Nom, prénom du responsable de plateau recevant :</i><i class="s">Signature</i></div>
+        <div class="u11-ligne" style="width:62%">${esc(plateau.responsable || "")}</div>
+        <div class="u11-cadre u11-gris" style="margin-top:4mm">
+          <div style="text-align:center"><span class="bi s" style="font-size:12pt">A remplir obligatoirement</span>
+            <span class="bi" style="font-size:9pt">(rayer la mention inutile)</span></div>
+          <div class="u11-oblig">
+            <span>Contrôle des licences :</span><span>OUI</span><span>NON</span>
+            <span>Traçage du terrain :</span><span>CORRECT</span><span>INCORRECT</span>
+            <span>Filet sur les buts :</span><span>OUI</span><span>NON</span>
+            <span>Protocole effectué :</span><span>OUI</span><span>NON</span>
+          </div>
+        </div>
+        <div class="u11-h"><span class="bi s">Rencontres Terrain 1</span>
+          <span class="bi s u11-rouge">${esc(U11.terrain1)}</span></div>
+        ${tableRencontres(3, true)}
+        <div class="u11-h"><span class="bi s">Rencontres Terrain 2</span></div>
+        ${tableRencontres(2, false)}
+        <div class="u11-h" style="text-align:center"><span class="bi s">Réserves ou réclamations éventuelles</span>
+          <i style="font-size:10pt">${esc(U11.reserves)}</i></div>
+        <div class="u11-ligne"></div><div class="u11-ligne"></div><div class="u11-ligne"></div>
+        <div class="u11-signatures"><span class="bi s">Signatures :</span><i>Le délégué plaignant</i>
+          <i>Le délégué adverse</i><i>L'arbitre</i></div>
+        <div style="text-align:right;font-size:9pt;margin-top:6mm"><i>Suite au verso</i></div>
+      </div>
+      <div class="fm-page">
+        <div class="u11-verso-titre"><span class="bi s">Compositions des équipes</span>
+          <i style="font-size:10pt">${esc(U11.compositions)}</i></div>
+        <div class="u11-blocs">${[0, 1, 2, 3].map((i) => bloc(i + 1, equipes[i] || null)).join("")}</div>
+        <div class="u11-h" style="font-size:12pt"><span class="bi s">Observations particulières</span>
+          <i style="font-size:10pt">${esc(U11.observations)}</i></div>
+        <div class="u11-ligne"></div><div class="u11-ligne"></div>
+        <div class="u11-h" style="font-size:11pt"><span class="bi s">Signatures des délégués :</span></div>
+        <div class="u11-signatures" style="margin-top:0;padding:0 8mm"><i>Equipe 1</i><i>Equipe 2</i><i>Equipe 3</i><i>Equipe 4</i></div>
+      </div>
+    </div>`;
+}
+
 function feuilleHTML(plateau, equipes, personneDe) {
+  if (plateau.type === "U11") return feuilleU11HTML(plateau, equipes, personneDe);
   const cat = intitule(plateau.type);
   const secondePage = equipes.length > BLOCS_PAR_PAGE;
 
@@ -801,14 +940,15 @@ function documentFeuille(corps) {
 /* ------------------------------------------------------------------ */
 /*  PDF — fabriqué à la main : le bac à sable de l'aperçu interdit     */
 /*  print() et l'ouverture d'onglets, un fichier reste la seule voie.  */
-/*  Polices de base : Times (F1/F2) et Courier gras (F3).              */
+/*  Polices de base : Times (F1/F2), Courier gras (F3), Times italique  */
+/*  (F4) et gras italique (F5), ces deux dernières pour la feuille U11. */
 /* ------------------------------------------------------------------ */
 const A4 = { l: 595.28, h: 841.89 };
 const MARGE = 36;
 
 const latin1 = (s) =>
   String(s ?? "")
-    .replace(/—/g, "-").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/…/g, "...")
+    .replace(/[—–]/g, "-").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/…/g, "...")
     .replace(/\u00A0/g, " ")
     .replace(/[^\x00-\xFF]/g, "?");
 
@@ -828,13 +968,15 @@ const L_TIMES_GRAS = (
 const largeurTexte = (s, taille, police = "F1") => {
   const t = latin1(s);
   if (police === "F3") return t.length * taille * 0.6;   // Courier : chasse fixe
-  const table = police === "F2" ? L_TIMES_GRAS : L_TIMES;
+  /* Le gras italique est un peu plus étroit que le gras romain. */
+  const table = police === "F2" || police === "F5" ? L_TIMES_GRAS : L_TIMES;
+  const serre = police === "F5" ? 0.94 : 1;
   let mille = 0;
   for (let i = 0; i < t.length; i++) {
     const c = t.charCodeAt(i);
     mille += c >= 32 && c <= 255 ? table[c - 32] : 500;
   }
-  return (mille * taille) / 1000;
+  return (mille * taille * serre) / 1000;
 };
 
 function tronquer(s, maxi, taille, police = "F1") {
@@ -878,6 +1020,28 @@ function crayon() {
       ops.push(`${gris} g ${x.toFixed(2)} ${y(haut + h)} ${l.toFixed(2)} ${h.toFixed(2)} re f 0 g`);
     },
     rouge(on) { ops.push(on ? "0.78 0.08 0.08 rg" : "0 g"); },
+    /* Ligne de points, comme les « …… » à remplir du modèle. */
+    pointilles(x1, x2, haut) {
+      ops.push(`q [0.6 2.4] 0 d 1 J 0.9 w ${x1.toFixed(2)} ${y(haut)} m ${x2.toFixed(2)} ${y(haut)} l S Q`);
+    },
+    /* Texte souligné ; rend la largeur du texte. */
+    souligne(x, haut, taille, police, s) {
+      api.texte(x, haut, taille, police, s);
+      const l = largeurTexte(s, taille, police);
+      api.trait(x, x + l, haut + 1.8, 0.6);
+      return l;
+    },
+    /* Cercle (quatre arcs de Bézier), pour entourer un numéro. */
+    cercle(xc, haut, r, ep = 0.8) {
+      const k = 0.5523 * r;
+      const yc = A4.h - haut;
+      const f = (v) => v.toFixed(2);
+      ops.push(`${ep} w ${f(xc + r)} ${f(yc)} m ` +
+        `${f(xc + r)} ${f(yc + k)} ${f(xc + k)} ${f(yc + r)} ${f(xc)} ${f(yc + r)} c ` +
+        `${f(xc - k)} ${f(yc + r)} ${f(xc - r)} ${f(yc + k)} ${f(xc - r)} ${f(yc)} c ` +
+        `${f(xc - r)} ${f(yc - k)} ${f(xc - k)} ${f(yc - r)} ${f(xc)} ${f(yc - r)} c ` +
+        `${f(xc + k)} ${f(yc - r)} ${f(xc + r)} ${f(yc - k)} ${f(xc + r)} ${f(yc)} c S`);
+    },
     image(img, x, haut, l) {
       const h = (l * img.h) / img.l;
       ops.push(`q ${l.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y(haut + h)} cm /${img.nom} Do Q`);
@@ -1006,7 +1170,248 @@ function pageSeconde(plateau, equipes, personneDe) {
   return p.ops.join("\n");
 }
 
+/* ------------------------------------------------------------------ */
+/*  Feuille de match U11 — modèle « Feuille de match U11 » du District  */
+/*  (football d'animation). Recto : le plateau et les cases à remplir   */
+/*  sur place ; verso : quatre blocs d'équipe de 12 joueurs. Le club    */
+/*  remplit le bloc 1 ; les numéros des féminines sont entourés.        */
+/* ------------------------------------------------------------------ */
+const U11 = {
+  important1: "un joueur qui n'a pas sa licence doit obligatoirement présenter un certificat médical récent pour pouvoir jouer",
+  important2: "Cette feuille de matches correctement remplie est à renvoyer dans les 48 heures au responsable du groupe (voir adresse sur le calendrier)",
+  terrain1: "(si 3 équipes seulement, A contre B puis B contre C puis A contre C)",
+  reserves: "(vous pouvez joindre une feuille volante si manque de place)",
+  compositions: "(signaler les féminines en entourant le numéro)",
+  observations: "(déroulement du plateau, esprit sportif du foot d'animation, blessés, etc) :",
+  colonnesRencontres: [
+    ["Matches", 245], ["Résultats", 61], ["Nom prénom de l'arbitre", 135], ["Jeune", 39], ["Adulte", 43],
+  ],
+};
+
+/* Un texte qui doit tenir sur une ligne : la taille baisse si besoin. */
+function ajuste(s, maxi, taille, police) {
+  let t = taille;
+  while (t > 6 && largeurTexte(s, t, police) > maxi) t -= 0.25;
+  return t;
+}
+
+function pageU11Recto(plateau) {
+  const p = crayon();
+  const L = xD - xG;
+
+  /* En-tête */
+  p.image(IMAGES[0], xG, 20, 62);
+  const xMil = 340;
+  p.centre(xMil, 38, 10, "F1", "FEDERATION FRANÇAISE DE FOOTBALL – LIGUE DU GRAND EST");
+  p.centre(xMil, 66, 17, "F2", "DISTRICT MOSELLAN DE FOOTBALL");
+  p.texte(150, 100, 10, "F1", "FOOTBALL D'ANIMATION");
+  p.souligne(150, 128, 15, "F2", "Feuille de match U11");
+  p.image(IMAGES[1], 388, 80, 171);
+
+  /* Important */
+  let h = 166;
+  p.aplat(xG, h, L, 40, "0.93");
+  p.cadre(xG, h, L, 40, 0.6);
+  const lab = "Important :";
+  const tImp = ajuste(` ${U11.important1}`, L - 12 - largeurTexte(lab, 9, "F5"), 8.5, "F5");
+  const l1 = largeurTexte(lab, 9, "F5") + largeurTexte(` ${U11.important1}`, tImp, "F5");
+  const x1 = xG + (L - l1) / 2;
+  const la = p.souligne(x1, h + 14, 9, "F5", lab);
+  p.texte(x1 + la, h + 14, tImp, "F5", ` ${U11.important1}`);
+  p.centre(xG + L / 2, h + 31, ajuste(U11.important2, L - 12, 8, "F2"), "F2", U11.important2);
+
+  /* Plateau */
+  h = 216;
+  p.cadre(xG, h, L, 68, 0.6);
+  const champ = (x, haut, label, valeur, xFin) => {
+    p.texte(x, haut, 13, "F5", label);
+    const xv = x + largeurTexte(label, 13, "F5") + 5;
+    if (valeur) p.texte(xv, haut - 1, 12, "F1", tronquer(valeur, xFin - xv, 12, "F1"));
+    else p.pointilles(xv, xFin, haut);
+  };
+  champ(xG + 28, h + 26, "Secteur :", plateau.secteur, 280);
+  champ(345, h + 26, "Groupe :", plateau.groupe, xD - 12);
+  champ(xG + 28, h + 56, "Date :", dateFrancaise(plateau.date), 280);
+  champ(345, h + 56, "Plateau à :", plateau.lieu, xD - 12);
+
+  /* Responsable */
+  h = 302;
+  p.souligne(xG, h, 11, "F4", "Nom, prénom du responsable de plateau recevant :");
+  p.souligne(380, h, 11, "F4", "Signature");
+  if (plateau.responsable) p.texte(xG, h + 22, 11, "F1", tronquer(plateau.responsable, 320, 11, "F1"));
+  p.pointilles(xG, 360, h + 25);
+
+  /* À remplir obligatoirement : laissé vierge, les mentions se rayent sur place */
+  h = 340;
+  p.aplat(xG, h, L, 66, "0.93");
+  p.cadre(xG, h, L, 66, 0.6);
+  const titre = "A remplir obligatoirement";
+  const sous = " (rayer la mention inutile)";
+  const lt = largeurTexte(titre, 12, "F5") + largeurTexte(sous, 9, "F5");
+  const xt = xG + (L - lt) / 2;
+  const lTitre = p.souligne(xt, h + 14, 12, "F5", titre);
+  p.texte(xt + lTitre + 3, h + 14, 9, "F5", sous);
+  const mention = (x, haut, label, oui, non, xOui, xNon) => {
+    p.texte(x, haut, 11, "F4", label);
+    p.texte(xOui, haut, 11, "F4", oui);
+    p.texte(xNon, haut, 11, "F4", non);
+  };
+  mention(xG + 4, h + 38, "Contrôle des licences :", "OUI", "NON", xG + 116, 206);
+  mention(xG + 4, h + 59, "Filet sur les buts :", "OUI", "NON", xG + 116, 206);
+  mention(308, h + 38, "Traçage du terrain :", "CORRECT", "INCORRECT", 412, 486);
+  mention(308, h + 59, "Protocole effectué :", "OUI", "NON", 412, 486);
+
+  /* Rencontres : tableaux vierges */
+  const rencontres = (haut, titreR, note, lignes) => {
+    const lr = p.souligne(xG, haut, 13, "F5", titreR);
+    if (note) {
+      p.rouge(true);
+      const ln = p.souligne(xG + lr + 4, haut, 10, "F5", note);
+      p.rouge(false);
+      void ln;
+    }
+    const top = haut + 10;
+    const hEnt = 15;
+    const hLig = 28;
+    const bas = top + hEnt + lignes * hLig;
+    p.cadre(xG, top, L, bas - top, 0.8);
+    let x = xG;
+    U11.colonnesRencontres.forEach(([nom, larg], i) => {
+      p.centre(x + larg / 2, top + 11, 10, "F5", nom);
+      if (i) p.vertical(x, top, bas, 0.6);
+      x += larg;
+    });
+    p.trait(xG, xD, top + hEnt, 0.6);
+    for (let i = 0; i < lignes; i++) {
+      const yl = top + hEnt + i * hLig;
+      if (i) p.trait(xG, xD, yl, 0.6);
+      p.centre(xG + 245 / 2, yl + 18, 12, "F2", "-");
+      p.centre(xG + 245 + 61 / 2, yl + 18, 12, "F2", "-");
+    }
+    return bas;
+  };
+  let bas = rencontres(426, "Rencontres Terrain 1", U11.terrain1, 3);
+  p.texte(xG + 3, bas - 5, 6, "F5", "Si 3 équipes");
+  bas = rencontres(bas + 22, "Rencontres Terrain 2", null, 2);
+
+  /* Réserves et signatures */
+  h = bas + 26;
+  const lr = largeurTexte("Réserves ou réclamations éventuelles", 13, "F5") + largeurTexte(` ${U11.reserves}`, 10, "F4");
+  const xr = xG + (L - lr) / 2;
+  const lRes = p.souligne(xr, h, 13, "F5", "Réserves ou réclamations éventuelles");
+  p.texte(xr + lRes, h, 10, "F4", ` ${U11.reserves}`);
+  for (let i = 0; i < 3; i++) p.pointilles(xG, xD, h + 22 + i * 20);
+  h += 22 + 2 * 20 + 32;
+  p.souligne(xG, h, 12, "F5", "Signatures");
+  p.texte(xG + largeurTexte("Signatures", 12, "F5") + 1, h, 12, "F5", " :");
+  p.texte(130, h, 11, "F4", "Le délégué plaignant");
+  p.texte(308, h, 11, "F4", "Le délégué adverse");
+  p.texte(483, h, 11, "F4", "L'arbitre");
+
+  p.droite(xD - 8, A4.h - 36, 9, "F4", "Suite au verso");
+  return p.ops.join("\n");
+}
+
+/* Un bloc d'équipe du verso (12 lignes, catégorie, capitaine, dirigeant,
+   éducateur). `equipe` vide : bloc vierge pour une équipe adverse. */
+const BLOC_U11 = { l: 256, hTitre: 16, hEntete: 17, hLigne: 17.5, hPied: 16 };
+
+function blocU11PDF(p, n, equipe, personneDe, bx, bt) {
+  const B = BLOC_U11;
+  const cNum = 19;
+  const cNom = B.l * 0.45;
+  const cLic = B.l * 0.405;
+  const xNom = bx + cNum;
+  const xLic = xNom + cNom;
+  const xCat = xLic + cLic;
+  const xFin = bx + B.l;
+  const debut = bt + B.hTitre + B.hEntete;
+  const finJoueurs = debut + 12 * B.hLigne;
+  const bas = finJoueurs + 3 * B.hPied;
+
+  p.cadre(bx, bt, B.l, bas - bt, 0.9);
+  const titre = `Nom de l'équipe ${n} :`;
+  p.texte(bx + 3, bt + 12, 10.5, "F5", titre);
+  if (equipe) {
+    const x = bx + 6 + largeurTexte(titre, 10.5, "F5");
+    p.texte(x, bt + 12, 10.5, "F2", tronquer(equipe.nom, xFin - x - 4, 10.5, "F2"));
+  }
+  p.trait(bx, xFin, bt + B.hTitre, 0.6);
+  p.centre(xNom + cNom / 2, bt + B.hTitre + 12, 10, "F5", "Nom et Prénom");
+  p.centre(xLic + cLic / 2, bt + B.hTitre + 12, 10, "F5", "N° de licence");
+  p.centre(xCat + (xFin - xCat) / 2, bt + B.hTitre + 10, 7.5, "F5", "Cat.");
+  p.trait(bx, xFin, debut, 0.6);
+  [xNom, xLic, xCat].forEach((x) => p.vertical(x, bt + B.hTitre, finJoueurs, 0.6));
+
+  for (let i = 0; i < 12; i++) {
+    const yl = debut + i * B.hLigne;
+    if (i) p.trait(bx, xFin, yl, 0.4);
+    const base = yl + 12.5;
+    const num = String(i + 1);
+    p.centre(bx + cNum / 2, base, 10, "F5", num);
+    const j = equipe ? personneDe(equipe.joueurs[i]) : null;
+    if (!j) continue;
+    if (j.feminine) p.cercle(bx + cNum / 2, base - 3.4, 7, 0.9);
+    p.texte(xNom + 3, base, 9.5, "F1", tronquer(`${j.nom} ${j.prenom}`, cNom - 6, 9.5, "F1"));
+    p.centre(xLic + cLic / 2, base, 9.5, "F1", j.licence || "");
+    p.centre(xCat + (xFin - xCat) / 2, base, 7.5, "F1", j.categorie || "");
+  }
+
+  const pied = (i, label, personne, licence) => {
+    const yl = finJoueurs + i * B.hPied;
+    p.trait(bx, xFin, yl, 0.6);
+    const base = yl + 11.5;
+    p.texte(bx + 3, base, 9, "F5", label);
+    const xn = bx + 5 + largeurTexte(label, 9, "F5");
+    const xLicLab = bx + B.l * 0.53;
+    if (licence) p.texte(xLicLab, base, 9, "F5", "N° lic.");
+    if (personne) {
+      const fin = licence ? xLicLab - 4 : xFin - 4;
+      p.texte(xn, base, 9.5, "F1", tronquer(`${personne.nom} ${personne.prenom}`, fin - xn, 9.5, "F1"));
+      if (licence && personne.licence) {
+        p.texte(xLicLab + 4 + largeurTexte("N° lic.", 9, "F5"), base, 9.5, "F1", personne.licence);
+      }
+    }
+  };
+  const qui = (id) => (equipe && id ? personneDe(id) : null);
+  pied(0, "Capitaine :", qui(equipe?.capitaineId), false);
+  pied(1, "Dirigeant :", qui(equipe?.dirigeantId), true);
+  pied(2, "Educateur :", qui(equipe?.educateurId), true);
+  return bas;
+}
+
+function pageU11Verso(equipes, personneDe) {
+  const p = crayon();
+  const L = xD - xG;
+  const titre = "Compositions des équipes";
+  const lt = largeurTexte(titre, 13, "F5") + largeurTexte(` ${U11.compositions}`, 10, "F4");
+  const xt = xG + (L - lt) / 2;
+  const l = p.souligne(xt, 46, 13, "F5", titre);
+  p.texte(xt + l, 46, 10, "F4", ` ${U11.compositions}`);
+
+  const gauche = xG;
+  const droite = xD - BLOC_U11.l;
+  let bas = 0;
+  [[gauche, 62], [droite, 62], [gauche, 380], [droite, 380]].forEach(([bx, bt], i) => {
+    bas = blocU11PDF(p, i + 1, equipes[i] || null, personneDe, bx, bt);
+  });
+
+  let h = bas + 30;
+  const lo = p.souligne(xG, h, 12, "F5", "Observations particulières");
+  p.texte(xG + lo, h, 10, "F4", ` ${U11.observations}`);
+  p.pointilles(xG, xD, h + 22);
+  p.pointilles(xG, xD, h + 44);
+  h += 66;
+  p.souligne(xG, h, 11, "F5", "Signatures des délégués :");
+  ["Equipe 1", "Equipe 2", "Equipe 3", "Equipe 4"].forEach((e, i) =>
+    p.texte(xG + 32 + i * 128, h + 14, 11, "F4", e));
+  return p.ops.join("\n");
+}
+
 function contenuPDF(plateau, equipes, personneDe) {
+  if (plateau.type === "U11") {
+    return [pageU11Recto(plateau), pageU11Verso(equipes, personneDe)];
+  }
   return [
     pagePremiere(plateau, equipes, personneDe),
     pageSeconde(plateau, equipes, personneDe),
@@ -1015,13 +1420,13 @@ function contenuPDF(plateau, equipes, personneDe) {
 
 /* Assemblage du fichier : catalogue, polices, images, puis les pages. */
 function construirePDF(pages) {
-  const nPolices = 3;
+  const nPolices = 5;
   const premiereImage = 3 + nPolices;                 // 1 catalogue, 2 pages
   const premierePage = premiereImage + IMAGES.length;
 
   const refsPages = pages.map((_, i) => `${premierePage + i * 2} 0 R`).join(" ");
   const ressources =
-    "/Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> /XObject << " +
+    "/Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R /F5 7 0 R >> /XObject << " +
     IMAGES.map((im, i) => `/${im.nom} ${premiereImage + i} 0 R`).join(" ") +
     " >> >>";
 
@@ -1031,6 +1436,8 @@ function construirePDF(pages) {
     "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic /Encoding /WinAnsiEncoding >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic /Encoding /WinAnsiEncoding >>",
   ];
 
   IMAGES.forEach((im) => {
@@ -1721,10 +2128,9 @@ export default function App() {
             ))}
           </div>
         )}
-        {onglet === "feuille" && document_ === "feuille" && (plateau.type === "U9"
-          ? <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
-          : <FeuilleAVenir plateau={plateau} equipes={equipes} personneDe={personneDe}
-              quoi="La feuille de match U11" />)}
+        {onglet === "feuille" && document_ === "feuille" && (
+          <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
+        )}
         {onglet === "feuille" && document_ === "convocation" && (
           feuilles.some((f) => f.plateau.type === "U9")
             ? <VueConvocation feuilles={feuilles.filter((f) => f.plateau.type === "U9")}
@@ -3562,7 +3968,9 @@ function VueFeuille({ plateau, equipes, personneDe }) {
       const url = URL.createObjectURL(new Blob([octets], { type: "application/pdf" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `feuille-${plateau.date || "date"}-${enSlug(plateau.niveau) || "plateau"}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
+      a.download = plateau.type === "U11"
+        ? `feuille-${plateau.date || "date"}-u11-${enSlug(plateau.lieu) || "lieu"}.pdf`
+        : `feuille-${plateau.date || "date"}-${enSlug(plateau.niveau) || "plateau"}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
