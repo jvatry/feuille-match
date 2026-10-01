@@ -2,7 +2,12 @@
 /**
  * chiffrer-effectif.mjs — prépare le fichier d'effectif chiffré servi à côté de l'application.
  *
- *   node chiffrer-effectif.mjs effectif.csv effectif.enc.json
+ *   node chiffrer-effectif.mjs --categorie u11 effectif-u11.csv
+ *
+ * Un effectif par catégorie (u9 : U8, U9 et leurs adultes ; u11 : U10, U11 et
+ * leurs adultes), chacun chiffré avec le code de sa catégorie. Sans
+ * --categorie : u9. Le fichier écrit est effectif-<categorie>.enc.json, sauf
+ * si un second nom est donné.
  *
  * La phrase de passe est demandée à la saisie (masquée), ou lue dans la variable
  * d'environnement FM_PHRASE pour un usage automatisé.
@@ -10,17 +15,17 @@
  * Entrée  : le CSV exporté par l'onglet Effectif de l'application (bouton
  *           Exporter). Le texte est chiffré tel quel : c'est l'application
  *           elle-même qui le relit ensuite, avec son propre lecteur de CSV.
- * Sortie  : effectif.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
+ * Sortie  : effectif-u9.enc.json ou effectif-u11.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
  *           Ce fichier seul est commité. Le CSV en clair ne l'est jamais.
  *
  * L'application publie elle-même l'effectif (bouton « Publier » de l'onglet
  * Effectif), via le relais décrit dans relais/README.md. Ce script reste la
  * solution de secours, et prépare la configuration du relais :
  *
- *   node chiffrer-effectif.mjs --jeton
+ *   node chiffrer-effectif.mjs --jeton --categorie u11
  *
- * affiche l'empreinte du code à donner au relais (EMPREINTE_JETON). Le relais
- * n'apprend jamais le code lui-même.
+ * affiche l'empreinte du code à donner au relais (EMPREINTE_JETON_U11). Le
+ * relais n'apprend jamais le code lui-même.
  *
  * Node 18 ou plus. Aucune dépendance.
  */
@@ -208,18 +213,36 @@ async function lirePhrase() {
   return phrase;
 }
 
+const CATEGORIES = ["u9", "u11"];
+
+/* --jeton et --categorie <u9|u11>, puis les fichiers. */
+function lireArguments(args) {
+  const options = { jeton: false, categorie: "u9", fichiers: [] };
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--jeton") options.jeton = true;
+    else if (args[i] === "--categorie") options.categorie = String(args[++i] || "").toLowerCase();
+    else options.fichiers.push(args[i]);
+  }
+  if (!CATEGORIES.includes(options.categorie)) {
+    console.error(`Catégorie inconnue : « ${options.categorie} ». Choisir u9 ou u11.`);
+    process.exit(1);
+  }
+  return options;
+}
+
 async function principal() {
-  if (process.argv[2] === "--jeton") {
+  const { jeton, categorie, fichiers } = lireArguments(process.argv.slice(2));
+  if (jeton) {
     const empreinte = await empreinteJeton(await lirePhrase());
-    console.log(`\nEMPREINTE_JETON = ${empreinte}`);
+    console.log(`\nEMPREINTE_JETON_${categorie.toUpperCase()} = ${empreinte}`);
     console.log("À enregistrer comme secret du relais (voir relais/README.md).");
     return;
   }
 
-  const [entree, sortie = "effectif.enc.json"] = process.argv.slice(2);
+  const [entree, sortie = `effectif-${categorie}.enc.json`] = fichiers;
 
   if (!entree) {
-    console.error("Usage : node chiffrer-effectif.mjs <effectif.csv> [effectif.enc.json]");
+    console.error("Usage : node chiffrer-effectif.mjs [--categorie u9|u11] <effectif.csv> [effectif-u9.enc.json]");
     process.exit(1);
   }
 
@@ -244,7 +267,7 @@ async function principal() {
   const paquet = await chiffrer(texte, phrase);
   await writeFile(sortie, JSON.stringify(paquet, null, 2) + "\n", "utf8");
 
-  console.log(`\n${sortie} écrit — ${lignes.length} lignes, empreinte ${paquet.empreinte}.`);
+  console.log(`\n${sortie} écrit (effectif ${categorie.toUpperCase()}) — ${lignes.length} lignes, empreinte ${paquet.empreinte}.`);
   console.log("Commite ce fichier. Garde le CSV en clair hors du dépôt.");
 }
 

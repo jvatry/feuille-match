@@ -5,10 +5,11 @@ compatibility_date = "2026-09-01"
 [vars]
 DEPOT = "jvatry/feuille-match"
 BRANCHE = "main"
-FICHIER = "effectif.enc.json"
 # Adresse(s) de l'application, séparées par des virgules (sans / final).
 ORIGINES = "https://jvatry.github.io"
 
 # Secrets, jamais dans ce fichier :
 #   npx wrangler secret put GITHUB_TOKEN
-#   npx wrangler secret put EMPREINTE_JETON
+#   npx wrangler secret put EMPREINTE_JETON_U9
+#   npx wrangler secret put EMPREINTE_JETON_U11
+# Le relais écrit effectif-u9.enc.json ou effectif-u11.enc.json, rien d'autre.
