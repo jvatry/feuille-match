@@ -1,20 +1,30 @@
 /**
  * Relais de publication de l'effectif — Cloudflare Worker.
  *
- * L'application envoie { paquet, jeton } :
- *   - paquet : effectif.enc.json déjà chiffré sur le téléphone (AES-256-GCM) ;
- *   - jeton  : preuve dérivée du code de l'effectif (PBKDF2), jamais le code.
- * Le relais vérifie le jeton contre son empreinte, contrôle la forme du paquet
- * et le commite dans le dépôt avec un jeton GitHub qu'il est seul à connaître.
- * Il ne voit jamais l'effectif en clair.
+ * L'application envoie { paquet, jeton, categorie } :
+ *   - paquet    : l'effectif de la catégorie, déjà chiffré sur le téléphone ;
+ *   - jeton     : preuve dérivée du code de la catégorie (PBKDF2), jamais le code ;
+ *   - categorie : « u9 » ou « u11 » (absente : u9, pour les anciennes versions).
+ * Le relais vérifie le jeton contre l'empreinte du code de cette catégorie,
+ * contrôle la forme du paquet et le commite dans effectif-<categorie>.enc.json
+ * avec un jeton GitHub qu'il est seul à connaître. Aucun autre fichier ne
+ * peut être écrit. Il ne voit jamais l'effectif en clair.
  *
- * Variables (wrangler.toml) : DEPOT, BRANCHE, FICHIER, ORIGINES.
- * Secrets : GITHUB_TOKEN, EMPREINTE_JETON (node chiffrer-effectif.mjs --jeton).
+ * Variables (wrangler.toml) : DEPOT, BRANCHE, ORIGINES.
+ * Secrets : GITHUB_TOKEN, EMPREINTE_JETON_U9, EMPREINTE_JETON_U11
+ *   (node chiffrer-effectif.mjs --jeton --categorie u11). EMPREINTE_JETON,
+ *   l'ancien secret unique, sert de repli pour u9 pendant la transition.
  */
 
 const TAILLE_MAX = 200_000;
 const CLES_PAQUET = ["algo", "donnees", "empreinte", "genere", "iv", "kdf", "v"];
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/* Les seuls fichiers que le relais accepte d'écrire. */
+const FICHIERS = { u9: "effectif-u9.enc.json", u11: "effectif-u11.enc.json" };
+
+const empreinteDe = (categorie, env) =>
+  categorie === "u11" ? env.EMPREINTE_JETON_U11 : env.EMPREINTE_JETON_U9 || env.EMPREINTE_JETON;
 
 export default {
   async fetch(requete, env) {
@@ -49,11 +59,13 @@ export default {
       return reponse(400, { erreur: "JSON" });
     }
 
-    if (!(await jetonValide(corps?.jeton, env.EMPREINTE_JETON))) return reponse(403, { erreur: "CODE_REFUSE" });
+    const categorie = corps?.categorie ?? "u9";
+    if (!Object.hasOwn(FICHIERS, categorie)) return reponse(400, { erreur: "CATEGORIE" });
+    if (!(await jetonValide(corps?.jeton, empreinteDe(categorie, env)))) return reponse(403, { erreur: "CODE_REFUSE" });
     if (!paquetValide(corps.paquet)) return reponse(400, { erreur: "PAQUET_INVALIDE" });
 
     try {
-      await commiter(corps.paquet, env);
+      await commiter(corps.paquet, FICHIERS[categorie], categorie, env);
     } catch (e) {
       console.error(e.message);
       return reponse(502, { erreur: "GITHUB" });
@@ -91,9 +103,9 @@ function paquetValide(p) {
   );
 }
 
-async function commiter(paquet, env) {
+async function commiter(paquet, fichier, categorie, env) {
   const branche = env.BRANCHE || "main";
-  const url = `https://api.github.com/repos/${env.DEPOT}/contents/${env.FICHIER || "effectif.enc.json"}`;
+  const url = `https://api.github.com/repos/${env.DEPOT}/contents/${fichier}`;
   const entetes = {
     Authorization: `Bearer ${env.GITHUB_TOKEN}`,
     Accept: "application/vnd.github+json",
@@ -110,7 +122,7 @@ async function commiter(paquet, env) {
     method: "PUT",
     headers: { ...entetes, "Content-Type": "application/json" },
     body: JSON.stringify({
-      message: `chore: publier l'effectif du ${paquet.genere} depuis l'application`,
+      message: `chore: publier l'effectif ${categorie.toUpperCase()} du ${paquet.genere} depuis l'application`,
       content: btoa(contenu),
       branch: branche,
       ...(sha ? { sha } : {}),

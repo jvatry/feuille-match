@@ -33,9 +33,14 @@ const MIN_JOUEURS = 5;   // 4 joueurs de champ + 1 gardien
 const MAX_JOUEURS = 8;   // + 3 remplaçants
 const MAX_EQUIPES = 8;   // la feuille du district : 4 blocs par page, sur deux pages
 const DELEGUE = "Délégué";
-/* Catégories de joueurs connues de l'effectif, commun à tout le club ; chaque
-   type de plateau choisit les siennes. Les adultes sont « Délégué ». */
+/* Catégories de joueurs que l'application sait lire ; chaque espace (U9,
+   U11) n'en garde que les siennes. Les adultes sont « Délégué ». */
 const CATEGORIES = ["U8", "U9", "U10", "U11"];
+
+/* L'application du club est divisée en espaces, un par catégorie : chaque
+   coach travaille dans le sien (plateaux, équipes, effectif, documents). */
+const ESPACES = ["U9", "U11"];
+const CLE_ESPACE = "feuilles:espace";
 
 const CLE_EFFECTIF = "feuilles:effectif";
 const CLE_PLATEAU = "feuilles:plateau";     // ancienne version : un seul plateau, relu une fois
@@ -47,8 +52,11 @@ const CLE_REMPLACEE = "feuilles:empreinte-remplacee";
 const CLE_PUBLIE = "feuilles:publie";
 const CLE_NOUVEAUTES = "feuilles:nouveautes";
 
-/* Effectif chiffré publié à côté de l'application. */
+/* Effectif chiffré publié à côté de l'application : un fichier par espace,
+   chacun ouvert par le code de sa catégorie. L'ancien fichier commun (U8/U9)
+   sert de repli à l'espace U9 le temps de la transition. */
 const URL_EFFECTIF = "./effectif.enc.json";
+const urlEffectif = (espace) => `./effectif-${espace.toLowerCase()}.enc.json`;
 
 /* Relais qui met en ligne l'effectif chiffré (voir relais/README.md). Vide :
    le bouton Publier explique que la publication n'est pas encore activée. */
@@ -61,12 +69,41 @@ const SEL_PUBLICATION = "feuille-match/publication";
 /* Nouvelle vérification de l'effectif publié pendant l'utilisation. */
 const INTERVALLE_VERIFICATION = 5 * 60 * 1000;
 
-/* Un type de plateau associe les catégories de joueurs qu'il mélange. Pour
-   l'instant un seul type existe (U9 : plateaux U8/U9 du club) ; un futur type
-   U7 (U6/U7, pour un autre club) s'ajouterait ici sans toucher au reste. */
+/* Les règles de chaque espace : catégories de joueurs, effectif d'une
+   équipe, nombre d'équipes, niveaux et encadrement. Le champ `type` d'un
+   plateau est celui de son espace.
+   - U9 : plateaux U8/U9 à 5, plusieurs équipes, un délégué chacune ;
+   - U11 : plateau U10/U11 à 8, une seule équipe de 12 au plus, un
+     capitaine, un dirigeant et un éducateur. */
 const TYPES_PLATEAU = {
-  U9: { label: "U9", categoriesJoueurs: ["U8", "U9"] },
+  U9: {
+    label: "U9",
+    description: "U8 et U9",
+    categoriesJoueurs: ["U8", "U9"],
+    minJoueurs: MIN_JOUEURS,
+    maxJoueurs: MAX_JOUEURS,
+    maxEquipes: MAX_EQUIPES,
+    niveaux: ["Niveau 2", "Intersecteur"],
+    encadrement: "delegue",
+    capitaine: false,
+  },
+  U11: {
+    label: "U11",
+    description: "U10 et U11",
+    categoriesJoueurs: ["U10", "U11"],
+    minJoueurs: 8,      // football à 8
+    maxJoueurs: 12,
+    maxEquipes: 1,
+    niveaux: ["Intersecteur"],
+    encadrement: "dirigeant-educateur",
+    capitaine: true,
+  },
 };
+
+const reglesDe = (plateau) => TYPES_PLATEAU[plateau.type] || TYPES_PLATEAU.U9;
+
+/* Les rôles d'une équipe qui désignent une personne de l'effectif. */
+const ROLES = ["delegueId", "capitaineId", "dirigeantId", "educateurId"];
 
 /* Tenue rappelée sur la convocation, modifiable au crayon. */
 const TENUE_DEFAUT = "maillot rayé / short bleu-blanc / chaussettes bleues, protège-tibias";
@@ -75,10 +112,15 @@ const TENUE_DEFAUT = "maillot rayé / short bleu-blanc / chaussettes bleues, pro
 const SECTEUR_DEFAUT = "Sidérurgie";
 const GROUPE_DEFAUT = "EST";
 
-/* Le même samedi, le club peut avoir un plateau par niveau : une feuille
+/* Le même samedi, un espace peut avoir un plateau par niveau : une feuille
    chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
-const NIVEAUX = ["Niveau 2", "Intersecteur"];
-const MAX_PLATEAUX = NIVEAUX.length;   // un plateau par niveau
+const NIVEAUX = TYPES_PLATEAU.U9.niveaux;
+
+/* Les niveaux de l'espace encore libres. */
+const niveauxLibres = (feuilles, espace) =>
+  TYPES_PLATEAU[espace].niveaux.filter((n) => !feuilles.some((f) => f.plateau.niveau === n));
+
+const plateauVide = (espace) => ({ ...PLATEAU_VIDE, type: espace, niveau: TYPES_PLATEAU[espace].niveaux[0] });
 
 const PLATEAU_VIDE = {
   type: "U9",
@@ -93,12 +135,26 @@ const PLATEAU_VIDE = {
   responsable: "",
 };
 
+/* Sans numéro : la seule équipe d'un plateau U11. */
 const equipeVide = (n) => ({
   id: `e${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-  nom: `${CLUB.nom.toUpperCase()} ${n}`,
+  nom: n ? `${CLUB.nom.toUpperCase()} ${n}` : CLUB.nom.toUpperCase(),
   joueurs: [],
   delegueId: null,
+  capitaineId: null,
+  dirigeantId: null,
+  educateurId: null,
 });
+
+/* Une équipe dont la personne `id` n'est plus là (ou change d'identifiant). */
+function remplacerPersonne(e, id, nouvelId = null) {
+  const joueurs = nouvelId
+    ? e.joueurs.map((i) => (i === id ? nouvelId : i))
+    : e.joueurs.filter((i) => i !== id);
+  const suite = { ...e, joueurs };
+  ROLES.forEach((r) => { if (e[r] === id) suite[r] = nouvelId; });
+  return suite;
+}
 
 /* Un plateau préparé : ses informations et ses équipes. */
 const feuilleVide = (plateau, equipes) => ({
@@ -107,11 +163,10 @@ const feuilleVide = (plateau, equipes) => ({
   equipes,
 });
 
-/* Un plateau relu depuis le stockage, quelle que soit sa version. */
-function reprendrePlateau(p) {
-  /* Avant le type de plateau il n'y avait pas de champ `type` (il y avait
-     `categorie`) : on retombe sur l'unique type existant plutôt que de planter. */
-  const type = TYPES_PLATEAU[p.type] ? p.type : "U9";
+/* Un plateau relu depuis le stockage de son espace, quelle que soit sa
+   version : il prend le type et un niveau de l'espace. */
+function reprendrePlateau(p, espace = "U9") {
+  const type = espace;
   /* Avant les valeurs du club (sans `defautsClub`), secteur et groupe les
      reçoivent une fois ; ensuite, ce que le délégué a choisi au crayon est
      conservé. Vides : les valeurs du club. */
@@ -120,12 +175,15 @@ function reprendrePlateau(p) {
     ...PLATEAU_VIDE,
     ...p,
     type,
-    niveau: NIVEAUX.includes(p.niveau) ? p.niveau : NIVEAUX[0],
+    niveau: TYPES_PLATEAU[type].niveaux.includes(p.niveau) ? p.niveau : TYPES_PLATEAU[type].niveaux[0],
     secteur: (!ancien && p.secteur) || SECTEUR_DEFAUT,
     groupe: (!ancien && p.groupe) || GROUPE_DEFAUT,
     defautsClub: true,
   };
 }
+
+/* Le nom d'un plateau dans son espace : son niveau. */
+const nomNiveau = (plateau) => plateau.niveau;
 
 /* « Niveau 2 — Garche · 26/09 · 2 éq. · 13 j. » */
 function resumePlateau(f) {
@@ -136,7 +194,7 @@ function resumePlateau(f) {
     `${f.equipes.length} éq.`,
     `${joueurs} j.`,
   ].filter(Boolean);
-  return `${f.plateau.niveau} — ${details.join(" · ")}`;
+  return `${nomNiveau(f.plateau)} — ${details.join(" · ")}`;
 }
 
 /* Où joue quelqu'un : le nom de l'équipe, précédé du niveau quand c'est
@@ -344,14 +402,14 @@ async function jetonPublication(phrase) {
   return versB64(new Uint8Array(bits));
 }
 
-async function envoyerPaquet(paquet, jeton) {
+async function envoyerPaquet(paquet, jeton, espace = "U9") {
   if (!URL_RELAIS) throw new Error("PUBLICATION_INACTIVE");
   let reponse;
   try {
     reponse = await fetch(URL_RELAIS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paquet, jeton }),
+      body: JSON.stringify({ paquet, jeton, categorie: espace.toLowerCase() }),
     });
   } catch (e) {
     throw new Error("RESEAU");
@@ -371,6 +429,17 @@ async function telechargerPaquet(url = URL_EFFECTIF) {
   const paquet = await reponse.json().catch(() => null);
   if (!paquet || paquet.v !== 1) throw new Error("FORMAT_INCONNU");
   return paquet;
+}
+
+/* L'effectif publié de l'espace ; pour U9, l'ancien fichier commun en repli
+   tant que effectif-u9.enc.json n'est pas en ligne. */
+async function telechargerEffectif(espace) {
+  try {
+    return await telechargerPaquet(urlEffectif(espace));
+  } catch (e) {
+    if (espace !== "U9" || e.message !== "FICHIER_INDISPONIBLE") throw e;
+    return telechargerPaquet(URL_EFFECTIF);
+  }
 }
 
 /* Rend le CSV en clair. AES-GCM refuse de déchiffrer si le code est faux :
@@ -662,7 +731,146 @@ function grilleHTML(equipes, page, personneDe) {
     </tbody></table>`;
 }
 
+const CSS_U11 = `
+  .u11 { font-family: "Times New Roman", Times, serif; color: #000; }
+  .u11 i, .u11 .bi { font-style: italic; }
+  .u11 .bi { font-weight: bold; }
+  .u11 .s { text-decoration: underline; }
+  .u11-haut { display: grid; grid-template-columns: 24mm 1fr 62mm; grid-template-rows: auto auto;
+              column-gap: 3mm; align-items: center; margin-bottom: 5mm; }
+  .u11-haut .district { grid-row: 1 / 3; width: 22mm; }
+  .u11-haut .fff { grid-column: 2 / 4; text-align: center; font-size: 10pt; }
+  .u11-haut .dist { font-size: 16pt; font-weight: bold; display: block; margin-top: 2mm; }
+  .u11-haut .anim { font-size: 10pt; }
+  .u11-haut .titre { font-size: 15pt; font-weight: bold; text-decoration: underline; margin-top: 3mm; }
+  .u11-haut .grandir { width: 60mm; }
+  .u11-cadre { border: 0.8pt solid #000; padding: 2mm 3mm; margin-bottom: 3mm; }
+  .u11-gris { background: #eee; }
+  .u11-imp { text-align: center; font-size: 8.5pt; line-height: 1.5; }
+  .u11-plateau { display: grid; grid-template-columns: 1fr 1fr; row-gap: 4mm; column-gap: 8mm;
+                 font-size: 13pt; padding: 4mm 8mm; }
+  .u11 .val { font-style: normal; font-weight: normal; font-size: 12pt; }
+  .u11 .pts { border-bottom: 1.2pt dotted #000; display: inline-block; min-width: 40mm; }
+  .u11-resp { display: flex; justify-content: space-between; font-size: 11pt; margin: 4mm 0 2mm; }
+  .u11-ligne { border-bottom: 1.2pt dotted #000; height: 6mm; }
+  .u11-oblig { display: grid; grid-template-columns: 38mm 16mm 1fr 36mm 22mm 1fr; row-gap: 2mm;
+               font-size: 11pt; font-style: italic; margin-top: 2mm; }
+  .u11-h { font-size: 13pt; margin: 5mm 0 2mm; }
+  .u11-rouge { color: #c01; font-size: 10pt; }
+  .u11-rencontres { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .u11-rencontres th, .u11-rencontres td { border: 0.8pt solid #000; text-align: center; }
+  .u11-rencontres th { font-style: italic; font-size: 10pt; height: 5mm; }
+  .u11-rencontres td { height: 9.5mm; font-weight: bold; position: relative; }
+  .u11-rencontres .si3 { position: absolute; left: 1mm; bottom: 0.5mm; font-size: 6pt; font-style: italic; }
+  .u11-signatures { display: flex; justify-content: space-between; font-size: 11pt; margin-top: 8mm; }
+  .u11-verso-titre { text-align: center; font-size: 13pt; margin-bottom: 4mm; }
+  .u11-blocs { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm 4mm; }
+  .u11-bloc { border: 1pt solid #000; font-size: 9.5pt; }
+  .u11-bloc table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .u11-bloc td, .u11-bloc th { border: 0.6pt solid #000; height: 5.6mm; padding: 0 1mm;
+                               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .u11-bloc th { font-style: italic; }
+  .u11-bloc .num { width: 6mm; text-align: center; font-style: italic; font-weight: bold; }
+  .u11-bloc .rond { display: inline-block; width: 4.6mm; height: 4.6mm; line-height: 4.6mm;
+                    border: 0.9pt solid #000; border-radius: 50%; }
+  .u11-bloc .lic, .u11-bloc .cat { text-align: center; }
+  .u11-bloc .cat { width: 7mm; font-size: 7.5pt; }
+  .u11-bloc .pied td { font-size: 9pt; }
+  .u11-bloc .bi { white-space: nowrap; }
+`;
+
+/* Aperçu de la feuille U11 : même contenu que le PDF (pageU11Recto / Verso). */
+function feuilleU11HTML(plateau, equipes, personneDe) {
+  const valeur = (v) => (v ? `<span class="val">${esc(v)}</span>` : `<span class="pts"></span>`);
+  const tableRencontres = (lignes, si3) => `
+    <table class="u11-rencontres">
+      <colgroup>${U11.colonnesRencontres.map(([, l]) => `<col style="width:${l}pt">`).join("")}</colgroup>
+      <tr>${U11.colonnesRencontres.map(([n]) => `<th class="bi">${esc(n)}</th>`).join("")}</tr>
+      ${Array.from({ length: lignes }, (_, i) => `<tr><td>–${si3 && i === lignes - 1 ? '<span class="si3">Si 3 équipes</span>' : ""}</td>
+        <td>–</td><td></td><td></td><td></td></tr>`).join("")}
+    </table>`;
+
+  const bloc = (n, e) => {
+    const lignes = Array.from({ length: 12 }, (_, i) => {
+      const j = e ? personneDe(e.joueurs[i]) : null;
+      const num = j?.feminine ? `<span class="rond">${i + 1}</span>` : String(i + 1);
+      return `<tr><td class="num">${num}</td><td>${j ? `${esc(j.nom)} ${esc(j.prenom)}` : ""}</td>
+        <td class="lic">${esc(j?.licence || "")}</td><td class="cat">${esc(j?.categorie || "")}</td></tr>`;
+    }).join("");
+    const qui = (id) => (e && id ? personneDe(id) : null);
+    const pied = (label, x, avecLicence) => `<tr class="pied"><td colspan="4">
+      <span class="bi">${label}</span> ${x ? `${esc(x.nom)} ${esc(x.prenom)}` : ""}
+      ${avecLicence ? `<span style="float:right;width:47%"><span class="bi">N° lic.</span> ${esc(x?.licence || "")}</span>` : ""}
+      </td></tr>`;
+    return `<div class="u11-bloc"><table>
+      <colgroup><col style="width:6mm"><col style="width:45%"><col><col style="width:7mm"></colgroup>
+      <tr><td colspan="4"><span class="bi">Nom de l'équipe ${n} :</span> <b>${esc(e?.nom || "")}</b></td></tr>
+      <tr><th></th><th class="bi">Nom et Prénom</th><th class="bi">N° de licence</th><th class="bi cat">Cat.</th></tr>
+      ${lignes}
+      ${pied("Capitaine :", qui(e?.capitaineId), false)}
+      ${pied("Dirigeant :", qui(e?.dirigeantId), true)}
+      ${pied("Educateur :", qui(e?.educateurId), true)}
+    </table></div>`;
+  };
+
+  return `
+    <style>${CSS_U11}</style>
+    <div class="fm u11">
+      <div class="fm-page">
+        <div class="u11-haut">
+          <img class="district" src="${jpeg(IMG_DISTRICT)}" alt="District Mosellan de Football">
+          <div class="fff">FEDERATION FRANÇAISE DE FOOTBALL – LIGUE DU GRAND EST
+            <span class="dist">DISTRICT MOSELLAN DE FOOTBALL</span></div>
+          <div><div class="anim">FOOTBALL D'ANIMATION</div><div class="titre">Feuille de match U11</div></div>
+          <img class="grandir" src="${jpeg(IMG_GRANDIR)}" alt="Football des enfants — Jouer pour grandir">
+        </div>
+        <div class="u11-cadre u11-gris u11-imp">
+          <span class="bi"><span class="s">Important :</span> ${esc(U11.important1)}</span><br>
+          <b>${esc(U11.important2)}</b>
+        </div>
+        <div class="u11-cadre u11-plateau bi">
+          <div>Secteur : ${valeur(plateau.secteur)}</div><div>Groupe : ${valeur(plateau.groupe)}</div>
+          <div>Date : ${valeur(dateFrancaise(plateau.date))}</div><div>Plateau à : ${valeur(plateau.lieu)}</div>
+        </div>
+        <div class="u11-resp"><i class="s">Nom, prénom du responsable de plateau recevant :</i><i class="s">Signature</i></div>
+        <div class="u11-ligne" style="width:62%">${esc(plateau.responsable || "")}</div>
+        <div class="u11-cadre u11-gris" style="margin-top:4mm">
+          <div style="text-align:center"><span class="bi s" style="font-size:12pt">A remplir obligatoirement</span>
+            <span class="bi" style="font-size:9pt">(rayer la mention inutile)</span></div>
+          <div class="u11-oblig">
+            <span>Contrôle des licences :</span><span>OUI</span><span>NON</span>
+            <span>Traçage du terrain :</span><span>CORRECT</span><span>INCORRECT</span>
+            <span>Filet sur les buts :</span><span>OUI</span><span>NON</span>
+            <span>Protocole effectué :</span><span>OUI</span><span>NON</span>
+          </div>
+        </div>
+        <div class="u11-h"><span class="bi s">Rencontres Terrain 1</span>
+          <span class="bi s u11-rouge">${esc(U11.terrain1)}</span></div>
+        ${tableRencontres(3, true)}
+        <div class="u11-h"><span class="bi s">Rencontres Terrain 2</span></div>
+        ${tableRencontres(2, false)}
+        <div class="u11-h" style="text-align:center"><span class="bi s">Réserves ou réclamations éventuelles</span>
+          <i style="font-size:10pt">${esc(U11.reserves)}</i></div>
+        <div class="u11-ligne"></div><div class="u11-ligne"></div><div class="u11-ligne"></div>
+        <div class="u11-signatures"><span class="bi s">Signatures :</span><i>Le délégué plaignant</i>
+          <i>Le délégué adverse</i><i>L'arbitre</i></div>
+        <div style="text-align:right;font-size:9pt;margin-top:6mm"><i>Suite au verso</i></div>
+      </div>
+      <div class="fm-page">
+        <div class="u11-verso-titre"><span class="bi s">Compositions des équipes</span>
+          <i style="font-size:10pt">${esc(U11.compositions)}</i></div>
+        <div class="u11-blocs">${[0, 1, 2, 3].map((i) => bloc(i + 1, equipes[i] || null)).join("")}</div>
+        <div class="u11-h" style="font-size:12pt"><span class="bi s">Observations particulières</span>
+          <i style="font-size:10pt">${esc(U11.observations)}</i></div>
+        <div class="u11-ligne"></div><div class="u11-ligne"></div>
+        <div class="u11-h" style="font-size:11pt"><span class="bi s">Signatures des délégués :</span></div>
+        <div class="u11-signatures" style="margin-top:0;padding:0 8mm"><i>Equipe 1</i><i>Equipe 2</i><i>Equipe 3</i><i>Equipe 4</i></div>
+      </div>
+    </div>`;
+}
+
 function feuilleHTML(plateau, equipes, personneDe) {
+  if (plateau.type === "U11") return feuilleU11HTML(plateau, equipes, personneDe);
   const cat = intitule(plateau.type);
   const secondePage = equipes.length > BLOCS_PAR_PAGE;
 
@@ -748,14 +956,15 @@ function documentFeuille(corps) {
 /* ------------------------------------------------------------------ */
 /*  PDF — fabriqué à la main : le bac à sable de l'aperçu interdit     */
 /*  print() et l'ouverture d'onglets, un fichier reste la seule voie.  */
-/*  Polices de base : Times (F1/F2) et Courier gras (F3).              */
+/*  Polices de base : Times (F1/F2), Courier gras (F3), Times italique  */
+/*  (F4) et gras italique (F5), ces deux dernières pour la feuille U11. */
 /* ------------------------------------------------------------------ */
 const A4 = { l: 595.28, h: 841.89 };
 const MARGE = 36;
 
 const latin1 = (s) =>
   String(s ?? "")
-    .replace(/—/g, "-").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/…/g, "...")
+    .replace(/[—–]/g, "-").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/…/g, "...")
     .replace(/\u00A0/g, " ")
     .replace(/[^\x00-\xFF]/g, "?");
 
@@ -775,13 +984,17 @@ const L_TIMES_GRAS = (
 const largeurTexte = (s, taille, police = "F1") => {
   const t = latin1(s);
   if (police === "F3") return t.length * taille * 0.6;   // Courier : chasse fixe
-  const table = police === "F2" ? L_TIMES_GRAS : L_TIMES;
+  /* Italiques : chasse du romain correspondant. Les lecteurs PDF qui
+     remplacent la police l'élargissent parfois : on laisse de la marge
+     (ESPACE_NOTE) entre un titre et le texte qui le suit. */
+  const table = police === "F2" || police === "F5" ? L_TIMES_GRAS : L_TIMES;
+  const serre = 1;
   let mille = 0;
   for (let i = 0; i < t.length; i++) {
     const c = t.charCodeAt(i);
     mille += c >= 32 && c <= 255 ? table[c - 32] : 500;
   }
-  return (mille * taille) / 1000;
+  return (mille * taille * serre) / 1000;
 };
 
 function tronquer(s, maxi, taille, police = "F1") {
@@ -825,6 +1038,28 @@ function crayon() {
       ops.push(`${gris} g ${x.toFixed(2)} ${y(haut + h)} ${l.toFixed(2)} ${h.toFixed(2)} re f 0 g`);
     },
     rouge(on) { ops.push(on ? "0.78 0.08 0.08 rg" : "0 g"); },
+    /* Ligne de points, comme les « …… » à remplir du modèle. */
+    pointilles(x1, x2, haut) {
+      ops.push(`q [0.6 2.4] 0 d 1 J 0.9 w ${x1.toFixed(2)} ${y(haut)} m ${x2.toFixed(2)} ${y(haut)} l S Q`);
+    },
+    /* Texte souligné ; rend la largeur du texte. */
+    souligne(x, haut, taille, police, s) {
+      api.texte(x, haut, taille, police, s);
+      const l = largeurTexte(s, taille, police);
+      api.trait(x, x + l, haut + 1.8, 0.6);
+      return l;
+    },
+    /* Cercle (quatre arcs de Bézier), pour entourer un numéro. */
+    cercle(xc, haut, r, ep = 0.8) {
+      const k = 0.5523 * r;
+      const yc = A4.h - haut;
+      const f = (v) => v.toFixed(2);
+      ops.push(`${ep} w ${f(xc + r)} ${f(yc)} m ` +
+        `${f(xc + r)} ${f(yc + k)} ${f(xc + k)} ${f(yc + r)} ${f(xc)} ${f(yc + r)} c ` +
+        `${f(xc - k)} ${f(yc + r)} ${f(xc - r)} ${f(yc + k)} ${f(xc - r)} ${f(yc)} c ` +
+        `${f(xc - r)} ${f(yc - k)} ${f(xc - k)} ${f(yc - r)} ${f(xc)} ${f(yc - r)} c ` +
+        `${f(xc + k)} ${f(yc - r)} ${f(xc + r)} ${f(yc - k)} ${f(xc + r)} ${f(yc)} c S`);
+    },
     image(img, x, haut, l) {
       const h = (l * img.h) / img.l;
       ops.push(`q ${l.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y(haut + h)} cm /${img.nom} Do Q`);
@@ -953,7 +1188,251 @@ function pageSeconde(plateau, equipes, personneDe) {
   return p.ops.join("\n");
 }
 
+/* ------------------------------------------------------------------ */
+/*  Feuille de match U11 — modèle « Feuille de match U11 » du District  */
+/*  (football d'animation). Recto : le plateau et les cases à remplir   */
+/*  sur place ; verso : quatre blocs d'équipe de 12 joueurs. Le club    */
+/*  remplit le bloc 1 ; les numéros des féminines sont entourés.        */
+/* ------------------------------------------------------------------ */
+const U11 = {
+  important1: "un joueur qui n'a pas sa licence doit obligatoirement présenter un certificat médical récent pour pouvoir jouer",
+  important2: "Cette feuille de matches correctement remplie est à renvoyer dans les 48 heures au responsable du groupe (voir adresse sur le calendrier)",
+  terrain1: "(si 3 équipes seulement, A contre B puis B contre C puis A contre C)",
+  reserves: "(vous pouvez joindre une feuille volante si manque de place)",
+  compositions: "(signaler les féminines en entourant le numéro)",
+  observations: "(déroulement du plateau, esprit sportif du foot d'animation, blessés, etc) :",
+  colonnesRencontres: [
+    ["Matches", 245], ["Résultats", 61], ["Nom prénom de l'arbitre", 135], ["Jeune", 39], ["Adulte", 43],
+  ],
+};
+
+/* Un texte qui doit tenir sur une ligne : la taille baisse si besoin. */
+/* Écart entre un titre souligné et la note qui le suit. */
+const ESPACE_NOTE = 5;
+
+function ajuste(s, maxi, taille, police) {
+  let t = taille;
+  while (t > 6 && largeurTexte(s, t, police) > maxi) t -= 0.25;
+  return t;
+}
+
+function pageU11Recto(plateau) {
+  const p = crayon();
+  const L = xD - xG;
+
+  /* En-tête */
+  p.image(IMAGES[0], xG, 20, 62);
+  const xMil = 340;
+  p.centre(xMil, 38, 10, "F1", "FEDERATION FRANÇAISE DE FOOTBALL – LIGUE DU GRAND EST");
+  p.centre(xMil, 66, 17, "F2", "DISTRICT MOSELLAN DE FOOTBALL");
+  p.texte(150, 100, 10, "F1", "FOOTBALL D'ANIMATION");
+  p.souligne(150, 128, 15, "F2", "Feuille de match U11");
+  p.image(IMAGES[1], 388, 80, 171);
+
+  /* Important */
+  let h = 166;
+  p.aplat(xG, h, L, 40, "0.93");
+  p.cadre(xG, h, L, 40, 0.6);
+  const lab = "Important :";
+  const tImp = ajuste(` ${U11.important1}`, L - 12 - largeurTexte(lab, 9, "F5"), 8.5, "F5");
+  const l1 = largeurTexte(lab, 9, "F5") + largeurTexte(` ${U11.important1}`, tImp, "F5");
+  const x1 = xG + (L - l1) / 2;
+  const la = p.souligne(x1, h + 14, 9, "F5", lab);
+  p.texte(x1 + la + ESPACE_NOTE, h + 14, tImp, "F5", ` ${U11.important1}`);
+  p.centre(xG + L / 2, h + 31, ajuste(U11.important2, L - 12, 8, "F2"), "F2", U11.important2);
+
+  /* Plateau */
+  h = 216;
+  p.cadre(xG, h, L, 68, 0.6);
+  const champ = (x, haut, label, valeur, xFin) => {
+    p.texte(x, haut, 13, "F5", label);
+    const xv = x + largeurTexte(label, 13, "F5") + 5;
+    if (valeur) p.texte(xv, haut - 1, 12, "F1", tronquer(valeur, xFin - xv, 12, "F1"));
+    else p.pointilles(xv, xFin, haut);
+  };
+  champ(xG + 28, h + 26, "Secteur :", plateau.secteur, 280);
+  champ(345, h + 26, "Groupe :", plateau.groupe, xD - 12);
+  champ(xG + 28, h + 56, "Date :", dateFrancaise(plateau.date), 280);
+  champ(345, h + 56, "Plateau à :", plateau.lieu, xD - 12);
+
+  /* Responsable */
+  h = 302;
+  p.souligne(xG, h, 11, "F4", "Nom, prénom du responsable de plateau recevant :");
+  p.souligne(380, h, 11, "F4", "Signature");
+  if (plateau.responsable) p.texte(xG, h + 22, 11, "F1", tronquer(plateau.responsable, 320, 11, "F1"));
+  p.pointilles(xG, 360, h + 25);
+
+  /* À remplir obligatoirement : laissé vierge, les mentions se rayent sur place */
+  h = 340;
+  p.aplat(xG, h, L, 66, "0.93");
+  p.cadre(xG, h, L, 66, 0.6);
+  const titre = "A remplir obligatoirement";
+  const sous = " (rayer la mention inutile)";
+  const lt = largeurTexte(titre, 12, "F5") + largeurTexte(sous, 9, "F5");
+  const xt = xG + (L - lt) / 2;
+  const lTitre = p.souligne(xt, h + 14, 12, "F5", titre);
+  p.texte(xt + lTitre + ESPACE_NOTE, h + 14, 9, "F5", sous);
+  const mention = (x, haut, label, oui, non, xOui, xNon) => {
+    p.texte(x, haut, 11, "F4", label);
+    p.texte(xOui, haut, 11, "F4", oui);
+    p.texte(xNon, haut, 11, "F4", non);
+  };
+  mention(xG + 4, h + 38, "Contrôle des licences :", "OUI", "NON", xG + 116, 206);
+  mention(xG + 4, h + 59, "Filet sur les buts :", "OUI", "NON", xG + 116, 206);
+  mention(308, h + 38, "Traçage du terrain :", "CORRECT", "INCORRECT", 412, 486);
+  mention(308, h + 59, "Protocole effectué :", "OUI", "NON", 412, 486);
+
+  /* Rencontres : tableaux vierges */
+  const rencontres = (haut, titreR, note, lignes) => {
+    const lr = p.souligne(xG, haut, 13, "F5", titreR);
+    if (note) {
+      p.rouge(true);
+      const ln = p.souligne(xG + lr + ESPACE_NOTE, haut, 10, "F5", note);
+      p.rouge(false);
+      void ln;
+    }
+    const top = haut + 10;
+    const hEnt = 15;
+    const hLig = 28;
+    const bas = top + hEnt + lignes * hLig;
+    p.cadre(xG, top, L, bas - top, 0.8);
+    let x = xG;
+    U11.colonnesRencontres.forEach(([nom, larg], i) => {
+      p.centre(x + larg / 2, top + 11, 10, "F5", nom);
+      if (i) p.vertical(x, top, bas, 0.6);
+      x += larg;
+    });
+    p.trait(xG, xD, top + hEnt, 0.6);
+    for (let i = 0; i < lignes; i++) {
+      const yl = top + hEnt + i * hLig;
+      if (i) p.trait(xG, xD, yl, 0.6);
+      p.centre(xG + 245 / 2, yl + 18, 12, "F2", "-");
+      p.centre(xG + 245 + 61 / 2, yl + 18, 12, "F2", "-");
+    }
+    return bas;
+  };
+  let bas = rencontres(426, "Rencontres Terrain 1", U11.terrain1, 3);
+  p.texte(xG + 3, bas - 5, 6, "F5", "Si 3 équipes");
+  bas = rencontres(bas + 22, "Rencontres Terrain 2", null, 2);
+
+  /* Réserves et signatures */
+  h = bas + 26;
+  const lr = largeurTexte("Réserves ou réclamations éventuelles", 13, "F5") + largeurTexte(` ${U11.reserves}`, 10, "F4");
+  const xr = xG + (L - lr) / 2;
+  const lRes = p.souligne(xr, h, 13, "F5", "Réserves ou réclamations éventuelles");
+  p.texte(xr + lRes + ESPACE_NOTE, h, 10, "F4", ` ${U11.reserves}`);
+  for (let i = 0; i < 3; i++) p.pointilles(xG, xD, h + 22 + i * 20);
+  h += 22 + 2 * 20 + 32;
+  p.souligne(xG, h, 12, "F5", "Signatures");
+  p.texte(xG + largeurTexte("Signatures", 12, "F5") + 1, h, 12, "F5", " :");
+  p.texte(130, h, 11, "F4", "Le délégué plaignant");
+  p.texte(308, h, 11, "F4", "Le délégué adverse");
+  p.texte(483, h, 11, "F4", "L'arbitre");
+
+  p.droite(xD - 8, A4.h - 36, 9, "F4", "Suite au verso");
+  return p.ops.join("\n");
+}
+
+/* Un bloc d'équipe du verso (12 lignes, catégorie, capitaine, dirigeant,
+   éducateur). `equipe` vide : bloc vierge pour une équipe adverse. */
+const BLOC_U11 = { l: 256, hTitre: 16, hEntete: 17, hLigne: 17.5, hPied: 16 };
+
+function blocU11PDF(p, n, equipe, personneDe, bx, bt) {
+  const B = BLOC_U11;
+  const cNum = 19;
+  const cNom = B.l * 0.45;
+  const cLic = B.l * 0.405;
+  const xNom = bx + cNum;
+  const xLic = xNom + cNom;
+  const xCat = xLic + cLic;
+  const xFin = bx + B.l;
+  const debut = bt + B.hTitre + B.hEntete;
+  const finJoueurs = debut + 12 * B.hLigne;
+  const bas = finJoueurs + 3 * B.hPied;
+
+  p.cadre(bx, bt, B.l, bas - bt, 0.9);
+  const titre = `Nom de l'équipe ${n} :`;
+  p.texte(bx + 3, bt + 12, 10.5, "F5", titre);
+  if (equipe) {
+    const x = bx + 6 + largeurTexte(titre, 10.5, "F5");
+    p.texte(x, bt + 12, 10.5, "F2", tronquer(equipe.nom, xFin - x - 4, 10.5, "F2"));
+  }
+  p.trait(bx, xFin, bt + B.hTitre, 0.6);
+  p.centre(xNom + cNom / 2, bt + B.hTitre + 12, 10, "F5", "Nom et Prénom");
+  p.centre(xLic + cLic / 2, bt + B.hTitre + 12, 10, "F5", "N° de licence");
+  p.centre(xCat + (xFin - xCat) / 2, bt + B.hTitre + 10, 7.5, "F5", "Cat.");
+  p.trait(bx, xFin, debut, 0.6);
+  [xNom, xLic, xCat].forEach((x) => p.vertical(x, bt + B.hTitre, finJoueurs, 0.6));
+
+  for (let i = 0; i < 12; i++) {
+    const yl = debut + i * B.hLigne;
+    if (i) p.trait(bx, xFin, yl, 0.4);
+    const base = yl + 12.5;
+    const num = String(i + 1);
+    p.centre(bx + cNum / 2, base, 10, "F5", num);
+    const j = equipe ? personneDe(equipe.joueurs[i]) : null;
+    if (!j) continue;
+    if (j.feminine) p.cercle(bx + cNum / 2, base - 3.4, 7, 0.9);
+    p.texte(xNom + 3, base, 9.5, "F1", tronquer(`${j.nom} ${j.prenom}`, cNom - 6, 9.5, "F1"));
+    p.centre(xLic + cLic / 2, base, 9.5, "F1", j.licence || "");
+    p.centre(xCat + (xFin - xCat) / 2, base, 7.5, "F1", j.categorie || "");
+  }
+
+  const pied = (i, label, personne, licence) => {
+    const yl = finJoueurs + i * B.hPied;
+    p.trait(bx, xFin, yl, 0.6);
+    const base = yl + 11.5;
+    p.texte(bx + 3, base, 9, "F5", label);
+    const xn = bx + 5 + largeurTexte(label, 9, "F5");
+    const xLicLab = bx + B.l * 0.53;
+    if (licence) p.texte(xLicLab, base, 9, "F5", "N° lic.");
+    if (personne) {
+      const fin = licence ? xLicLab - 4 : xFin - 4;
+      p.texte(xn, base, 9.5, "F1", tronquer(`${personne.nom} ${personne.prenom}`, fin - xn, 9.5, "F1"));
+      if (licence && personne.licence) {
+        p.texte(xLicLab + 4 + largeurTexte("N° lic.", 9, "F5"), base, 9.5, "F1", personne.licence);
+      }
+    }
+  };
+  const qui = (id) => (equipe && id ? personneDe(id) : null);
+  pied(0, "Capitaine :", qui(equipe?.capitaineId), false);
+  pied(1, "Dirigeant :", qui(equipe?.dirigeantId), true);
+  pied(2, "Educateur :", qui(equipe?.educateurId), true);
+  return bas;
+}
+
+function pageU11Verso(equipes, personneDe) {
+  const p = crayon();
+  const L = xD - xG;
+  const titre = "Compositions des équipes";
+  const lt = largeurTexte(titre, 13, "F5") + largeurTexte(` ${U11.compositions}`, 10, "F4");
+  const xt = xG + (L - lt) / 2;
+  const l = p.souligne(xt, 46, 13, "F5", titre);
+  p.texte(xt + l + ESPACE_NOTE, 46, 10, "F4", ` ${U11.compositions}`);
+
+  const gauche = xG;
+  const droite = xD - BLOC_U11.l;
+  let bas = 0;
+  [[gauche, 62], [droite, 62], [gauche, 380], [droite, 380]].forEach(([bx, bt], i) => {
+    bas = blocU11PDF(p, i + 1, equipes[i] || null, personneDe, bx, bt);
+  });
+
+  let h = bas + 30;
+  const lo = p.souligne(xG, h, 12, "F5", "Observations particulières");
+  p.texte(xG + lo + ESPACE_NOTE, h, 10, "F4", ` ${U11.observations}`);
+  p.pointilles(xG, xD, h + 22);
+  p.pointilles(xG, xD, h + 44);
+  h += 66;
+  p.souligne(xG, h, 11, "F5", "Signatures des délégués :");
+  ["Equipe 1", "Equipe 2", "Equipe 3", "Equipe 4"].forEach((e, i) =>
+    p.texte(xG + 32 + i * 128, h + 14, 11, "F4", e));
+  return p.ops.join("\n");
+}
+
 function contenuPDF(plateau, equipes, personneDe) {
+  if (plateau.type === "U11") {
+    return [pageU11Recto(plateau), pageU11Verso(equipes, personneDe)];
+  }
   return [
     pagePremiere(plateau, equipes, personneDe),
     pageSeconde(plateau, equipes, personneDe),
@@ -962,13 +1441,13 @@ function contenuPDF(plateau, equipes, personneDe) {
 
 /* Assemblage du fichier : catalogue, polices, images, puis les pages. */
 function construirePDF(pages) {
-  const nPolices = 3;
+  const nPolices = 5;
   const premiereImage = 3 + nPolices;                 // 1 catalogue, 2 pages
   const premierePage = premiereImage + IMAGES.length;
 
   const refsPages = pages.map((_, i) => `${premierePage + i * 2} 0 R`).join(" ");
   const ressources =
-    "/Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> /XObject << " +
+    "/Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R /F5 7 0 R >> /XObject << " +
     IMAGES.map((im, i) => `/${im.nom} ${premiereImage + i} 0 R`).join(" ") +
     " >> >>";
 
@@ -978,6 +1457,8 @@ function construirePDF(pages) {
     "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic /Encoding /WinAnsiEncoding >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic /Encoding /WinAnsiEncoding >>",
   ];
 
   IMAGES.forEach((im) => {
@@ -1030,6 +1511,24 @@ const stockage = {
   },
 };
 
+/* Le stockage d'un espace : « feuilles:effectif » devient
+   « feuilles:u11:effectif ». L'espace U9 relit les clés d'avant les espaces
+   tant qu'il n'a rien écrit à la place : rien n'est perdu sur les
+   téléphones qui servaient déjà. */
+function stockageEspace(espace) {
+  const nom = (cle) => `feuilles:${espace.toLowerCase()}:${cle.replace(/^feuilles:/, "")}`;
+  return {
+    async lire(cle) {
+      const v = await stockage.lire(nom(cle));
+      if (v !== null && v !== undefined) return v;
+      return espace === "U9" ? stockage.lire(cle) : null;
+    },
+    ecrire(cle, valeur) {
+      return stockage.ecrire(nom(cle), valeur);
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Suivi d'usage — un compteur, rien de plus. Aucun nom, aucune       */
 /*  licence, aucun lieu ni date de plateau ne sort d'ici.              */
@@ -1045,13 +1544,117 @@ function suivi(evenement) {
 
 
 /* ------------------------------------------------------------------ */
-/*  Application                                                        */
+/*  Application : le club, puis l'espace de la catégorie du coach      */
 /* ------------------------------------------------------------------ */
 export default function App() {
+  /* undefined : lecture en cours ; null : à choisir. */
+  const [espace, setEspace] = useState(undefined);
+
+  useEffect(() => {
+    (async () => {
+      let e = null;
+      try { e = await stockage.lire(CLE_ESPACE); } catch (err) { /* stockage indisponible */ }
+      if (!ESPACES.includes(e)) {
+        /* Un téléphone qui servait avant les espaces : c'était l'U9. */
+        let deja = null;
+        try {
+          deja = (await stockage.lire("feuilles:effectif")) || (await stockage.lire("feuilles:plateaux"))
+            || (await stockage.lire("feuilles:plateau")) || (await stockage.lire("feuilles:code"));
+        } catch (err) { /* rien */ }
+        e = deja ? "U9" : null;
+        if (e) try { stockage.ecrire(CLE_ESPACE, e); } catch (err) { /* best effort */ }
+      }
+      setEspace(e);
+    })();
+  }, []);
+
+  const choisir = (e) => {
+    try { stockage.ecrire(CLE_ESPACE, e); } catch (err) { /* best effort */ }
+    suivi(`espace/${e}`);
+    setEspace(e);
+  };
+
+  if (espace === undefined) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm"
+        style={{ background: C.craie, color: C.ink70 }}>
+        Ouverture…
+      </div>
+    );
+  }
+  if (!espace) return <ChoixEspace choisir={choisir} />;
+  return <EspaceCategorie key={espace} espace={espace} changerEspace={choisir} />;
+}
+
+/* Première ouverture : la catégorie que le coach encadre. */
+function ChoixEspace({ choisir }) {
+  return (
+    <div className="min-h-screen" style={{ background: C.craie, color: C.ink }}>
+      <div className="max-w-md mx-auto px-5 py-12">
+        <div className="flex items-center gap-3 mb-10">
+          <img src={LOGO} alt="" className="h-14 w-auto" />
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>Gestion des plateaux</h1>
+            <p className="text-xs" style={{ color: C.ink70 }}>{CLUB.nom} · {CLUB.numero}</p>
+          </div>
+        </div>
+        <h2 className="text-base font-semibold mb-4">Vous encadrez :</h2>
+        <div className="grid gap-3">
+          {ESPACES.map((e) => (
+            <button key={e} onClick={() => choisir(e)}
+              className="w-full rounded-lg border px-4 py-4 text-left flex items-baseline gap-3"
+              style={{ borderColor: C.terrain, background: C.papier }}>
+              <span className="text-2xl font-semibold" style={{ color: C.terrain }}>{e}</span>
+              <span className="text-sm" style={{ color: C.ink70 }}>{TYPES_PLATEAU[e].description}</span>
+            </button>
+          ))}
+        </div>
+        <p className="text-xs mt-6" style={{ color: C.ink70 }}>
+          Vous pourrez changer de catégorie à tout moment depuis l'en-tête.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* Dans l'en-tête : la catégorie de l'espace, et de quoi en changer. */
+function SelecteurEspace({ espace, changer }) {
+  const [ouvert, setOuvert] = useState(false);
+  return (
+    <span className="relative inline-block">
+      <button onClick={() => setOuvert((v) => !v)} aria-expanded={ouvert}
+        aria-label={`Catégorie ${espace}, changer de catégorie`}
+        className="ml-2 px-2 py-0.5 rounded-md border text-base font-semibold inline-flex items-center gap-1 align-middle"
+        style={{ borderColor: C.terrain, color: C.terrain, background: C.terrainSoft }}>
+        {espace} <ChevronDown size={14} />
+      </button>
+      {ouvert && (
+        <span className="absolute left-2 top-full mt-1 z-20 rounded-lg border shadow-md flex flex-col min-w-[9rem]"
+          style={{ background: C.papier, borderColor: C.ligne }}>
+          {ESPACES.map((e) => (
+            <button key={e} onClick={() => { setOuvert(false); if (e !== espace) changer(e); }}
+              aria-pressed={e === espace}
+              className="px-3 py-2 text-left text-sm flex items-baseline gap-2"
+              style={{ color: e === espace ? C.terrain : C.ink, fontWeight: e === espace ? 600 : 400 }}>
+              {e} <span className="text-xs" style={{ color: C.ink70 }}>{TYPES_PLATEAU[e].description}</span>
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/* Un espace : plateaux, équipes, documents et effectif d'une catégorie.
+   Monté à neuf à chaque changement d'espace, avec son propre stockage. */
+function EspaceCategorie({ espace, changerEspace }) {
+  const regles = TYPES_PLATEAU[espace];
+  const stockage = useMemo(() => stockageEspace(espace), [espace]);
   const [effectif, setEffectif] = useState([]);
   /* Les plateaux préparés pour le samedi ; les onglets Plateau, Équipes et
      Feuille travaillent sur le plateau actif. */
-  const [feuilles, setFeuilles] = useState(() => [feuilleVide(PLATEAU_VIDE, [equipeVide(1)])]);
+  const [feuilles, setFeuilles] = useState(() =>
+    [feuilleVide(plateauVide(espace), [equipeVide(regles.maxEquipes === 1 ? 0 : 1)])]);
   const [active, setActive] = useState(null);
   const [equipeActive, setEquipeActive] = useState(null);
   const [viderDemande, setViderDemande] = useState(false);
@@ -1083,8 +1686,10 @@ export default function App() {
       return change ? suite : prev;
     });
 
-  /* Les équipes sont numérotées à la suite d'un plateau à l'autre. */
-  const numeroSuivant = () => feuilles.reduce((n, f) => n + f.equipes.length, 0) + 1;
+  /* Les équipes sont numérotées à la suite d'un plateau à l'autre ; une
+     équipe seule (U11) porte le nom du club sans numéro. */
+  const numeroSuivant = () =>
+    regles.maxEquipes === 1 ? 0 : feuilles.reduce((n, f) => n + f.equipes.length, 0) + 1;
   const [onglet, setOnglet] = useState("effectif");
   const [pret, setPret] = useState(false);
   const [etatEffectif, setEtatEffectif] = useState("chargement");
@@ -1128,7 +1733,7 @@ export default function App() {
 
     let paquet;
     try {
-      paquet = await telechargerPaquet();
+      paquet = await telechargerEffectif(espace);
     } catch (e) {
       return liste.length ? "hors_ligne" : "indisponible";
     }
@@ -1210,10 +1815,11 @@ export default function App() {
         if (d?.feuilles?.length) {
           const lues = d.feuilles.map((f) => ({
             ...f,
-            plateau: reprendrePlateau(f.plateau || {}),
+            plateau: reprendrePlateau(f.plateau || {}, espace),
             /* Les noms d'équipe par défaut d'avant le trait d'union
                (« F.C. HETTANGE GRANDE 1 ») prennent le nom officiel. */
-            equipes: (f.equipes?.length ? f.equipes : [equipeVide(1)]).map((e) => ({
+            equipes: (f.equipes?.length ? f.equipes : [equipeVide(regles.maxEquipes === 1 ? 0 : 1)])
+              .slice(0, regles.maxEquipes).map((e) => ({
               ...e,
               nom: e.nom.replace(/^F\.C\. HETTANGE GRANDE\b/, CLUB.nom.toUpperCase()),
             })),
@@ -1254,7 +1860,7 @@ export default function App() {
 
   /* Saisie du code : télécharge, déchiffre, mémorise. */
   const ouvrirAvecCode = async (code) => {
-    const paquet = await telechargerPaquet();
+    const paquet = await telechargerEffectif(espace);
     const { personnes } = depuisCSV(await dechiffrerPaquet(paquet, code));
     if (!personnes.length) throw new Error("FICHIER_VIDE");
     recevoir(personnes, paquet, publie, false);
@@ -1302,14 +1908,15 @@ export default function App() {
     if (!pret || !effectif.length) return;
     const ids = new Set(effectif.map((p) => p.id));
     toutesEquipes((prev) => {
+      const absent = (i) => i && !ids.has(i);
       const orphelin = prev.some((e) =>
-        e.joueurs.some((i) => !ids.has(i)) || (e.delegueId && !ids.has(e.delegueId)));
+        e.joueurs.some(absent) || ROLES.some((r) => absent(e[r])));
       if (!orphelin) return prev;
-      return prev.map((e) => ({
-        ...e,
-        joueurs: e.joueurs.filter((i) => ids.has(i)),
-        delegueId: ids.has(e.delegueId) ? e.delegueId : null,
-      }));
+      return prev.map((e) => {
+        const suite = { ...e, joueurs: e.joueurs.filter((i) => ids.has(i)) };
+        ROLES.forEach((r) => { if (absent(e[r])) suite[r] = null; });
+        return suite;
+      });
     });
   }, [effectif, pret]);
 
@@ -1334,13 +1941,13 @@ export default function App() {
        encore, synchroniser() ne la réapplique pas. */
     let remplacee = "";
     try {
-      remplacee = (await telechargerPaquet()).empreinte || "";
+      remplacee = (await telechargerEffectif(espace)).empreinte || "";
     } catch (e) {
       try { remplacee = (await stockage.lire(CLE_EMPREINTE)) || ""; } catch (e2) { /* best effort */ }
     }
     const liste = effectif;
     const paquet = await chiffrerPaquet(versCSV(liste), code);
-    await envoyerPaquet(paquet, await jetonPublication(code));
+    await envoyerPaquet(paquet, await jetonPublication(code), espace);
     try {
       stockage.ecrire(CLE_CODE, code);
       stockage.ecrire(CLE_EMPREINTE, paquet.empreinte);
@@ -1363,9 +1970,11 @@ export default function App() {
     const joue = {};
     const delegue = {};
     feuilles.forEach((f) => f.equipes.forEach((e) => {
-      const place = { equipe: e, feuilleId: f.id, niveau: f.plateau.niveau };
+      const place = { equipe: e, feuilleId: f.id, niveau: nomNiveau(f.plateau) };
       e.joueurs.forEach((id) => { joue[id] = place; });
-      if (e.delegueId) delegue[e.delegueId] = [...(delegue[e.delegueId] || []), place];
+      ["delegueId", "dirigeantId", "educateurId"].forEach((r) => {
+        if (e[r]) delegue[e[r]] = [...(delegue[e[r]] || []), place];
+      });
     }));
     return { affectation: joue, delegations: delegue };
   }, [feuilles]);
@@ -1380,11 +1989,12 @@ export default function App() {
         equipes: f.equipes.map((e) => {
           if (e.id !== equipeId) return e;
           const dejaIci = e.joueurs.includes(joueurId);
-          if (!dejaIci && e.joueurs.length >= MAX_JOUEURS) return e;
-          return {
-            ...e,
-            joueurs: dejaIci ? e.joueurs.filter((i) => i !== joueurId) : [...e.joueurs, joueurId],
-          };
+          if (!dejaIci && e.joueurs.length >= reglesDe(f.plateau).maxJoueurs) return e;
+          /* Retiré de l'équipe, il n'en est plus le capitaine. */
+          return dejaIci
+            ? { ...e, joueurs: e.joueurs.filter((i) => i !== joueurId),
+                capitaineId: e.capitaineId === joueurId ? null : e.capitaineId }
+            : { ...e, joueurs: [...e.joueurs, joueurId] };
         }),
       }));
     });
@@ -1394,7 +2004,7 @@ export default function App() {
     setEquipes((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 
   const ajouterEquipe = () => {
-    if (equipes.length >= MAX_EQUIPES) return;
+    if (equipes.length >= regles.maxEquipes) return;
     const e = equipeVide(numeroSuivant());
     setEquipes((prev) => [...prev, e]);
     setEquipeActive(e.id);
@@ -1413,13 +2023,11 @@ export default function App() {
   /* Un plateau de plus pour le même samedi : il reprend les informations
      communes du plateau affiché et prend le niveau encore libre. */
   const ajouterPlateau = () => {
-    const pris = feuilles.map((f) => f.plateau.niveau);
-    const libre = NIVEAUX.find((n) => !pris.includes(n));
-    if (feuilles.length >= MAX_PLATEAUX || !libre) return;
+    const [libre] = niveauxLibres(feuilles, espace);
+    if (!libre) return;
     const f = feuilleVide(
       {
-        ...PLATEAU_VIDE,
-        type: plateau.type,
+        ...plateauVide(espace),
         niveau: libre,
         date: plateau.date,
         secteur: plateau.secteur,
@@ -1441,7 +2049,7 @@ export default function App() {
     if (id === courante.id) choisirPlateau(reste[0].id);
   };
 
-  /* Le samedi suivant : chaque plateau garde son niveau, son type, son
+  /* Le samedi suivant, dans cet espace : chaque plateau garde son niveau, son
      secteur, son groupe, ses équipes et leurs délégués ; la date, le lieu
      (adresse et heure de rendez-vous comprises), le responsable et les
      joueurs sont vidés. */
@@ -1449,7 +2057,7 @@ export default function App() {
     setFeuilles((prev) => prev.map((f) => ({
       ...f,
       plateau: { ...f.plateau, date: "", lieu: "", adresse: "", heureRdv: "", responsable: "" },
-      equipes: f.equipes.map((e) => ({ ...e, joueurs: [] })),
+      equipes: f.equipes.map((e) => ({ ...e, joueurs: [], capitaineId: null })),
     })));
     setViderDemande(false);
     setOnglet("plateau");
@@ -1461,25 +2069,13 @@ export default function App() {
     const nouvelId = idPersonne(fiche.licence, fiche.nom, fiche.prenom);
     setEffectif((prev) => prev.map((p) => (p.id === id ? { ...fiche, id: nouvelId } : p)));
     if (nouvelId === id) return;
-    toutesEquipes((prev) =>
-      prev.map((e) => ({
-        ...e,
-        joueurs: e.joueurs.map((i) => (i === id ? nouvelId : i)),
-        delegueId: e.delegueId === id ? nouvelId : e.delegueId,
-      }))
-    );
+    toutesEquipes((prev) => prev.map((e) => remplacerPersonne(e, id, nouvelId)));
   };
 
   /* Retirer quelqu'un de l'effectif le retire aussi des équipes. */
   const retirerDeLEffectif = (id) => {
     setEffectif((prev) => prev.filter((p) => p.id !== id));
-    toutesEquipes((prev) =>
-      prev.map((e) => ({
-        ...e,
-        joueurs: e.joueurs.filter((i) => i !== id),
-        delegueId: e.delegueId === id ? null : e.delegueId,
-      }))
-    );
+    toutesEquipes((prev) => prev.map((e) => remplacerPersonne(e, id)));
   };
 
   if (!pret) {
@@ -1499,6 +2095,8 @@ export default function App() {
   if (demandeCode) {
     return (
       <Deverrouillage
+        espace={espace}
+        changerEspace={changerEspace}
         etat={etatEffectif}
         ouvrir={ouvrirAvecCode}
         coller={reprendreColle}
@@ -1529,6 +2127,7 @@ export default function App() {
             <div className="min-w-0">
               <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>
                 Gestion des plateaux
+                <SelecteurEspace espace={espace} changer={changerEspace} />
               </h1>
               <p className="text-xs" style={{ color: C.ink70 }}>
                 {CLUB.nom} · {CLUB.numero}
@@ -1548,8 +2147,8 @@ export default function App() {
               {feuilles.length > 1 ? `Vider les ${feuilles.length} plateaux ?` : "Vider le plateau ?"}
             </p>
             <p className="mb-2" style={{ color: C.ink70 }}>
-              La date, le lieu, le responsable et les joueurs sont effacés. Les niveaux,
-              les équipes et leurs délégués sont gardés.
+              La date, le lieu, le responsable, les joueurs et les capitaines sont effacés.
+              Les niveaux, les équipes et leur encadrement sont gardés.
             </p>
             <div className="flex gap-2">
               <button onClick={nouveauSamedi} className="px-3 py-1.5 rounded-md text-sm"
@@ -1561,9 +2160,11 @@ export default function App() {
         )}
       </header>
 
-      {onglet !== "effectif" && (
+      {/* Un seul plateau possible (U11) : pas de sélecteur. */}
+      {onglet !== "effectif" && (feuilles.length > 1 || niveauxLibres(feuilles, espace).length > 0) && (
         <SelecteurPlateaux feuilles={feuilles} active={courante.id}
-          choisir={choisirPlateau} ajouter={ajouterPlateau} />
+          choisir={choisirPlateau}
+          ajouter={niveauxLibres(feuilles, espace).length ? ajouterPlateau : null} />
       )}
 
       <main className="max-w-3xl mx-auto px-4 py-5">
@@ -1636,6 +2237,7 @@ export default function App() {
         )}
         {onglet === "effectif" && (
           <VueEffectif
+            espace={espace}
             effectif={effectif}
             setEffectif={setEffectif}
             affectation={affectation}
@@ -1776,7 +2378,7 @@ function BadgeLicence() {
 
 /* Première ouverture sur un appareil : le code de l'effectif, ou une liste
    collée pour le soir où le code n'est pas sous la main. */
-function Deverrouillage({ etat, ouvrir, coller, annuler }) {
+function Deverrouillage({ espace = "U9", changerEspace, etat, ouvrir, coller, annuler }) {
   const [code, setCode] = useState("");
   const [texte, setTexte] = useState("");
   const [collageOuvert, setCollageOuvert] = useState(false);
@@ -1790,7 +2392,9 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
     try {
       await ouvrir(code.trim());
     } catch (e) {
-      setErreur(ERREURS_CODE[e.message] || "Le déverrouillage a échoué. Réessayez dans un instant.");
+      setErreur(e.message === "CODE_INCORRECT"
+        ? `Ce code n'ouvre pas l'effectif ${espace}. Vérifiez la saisie.`
+        : ERREURS_CODE[e.message] || "Le déverrouillage a échoué. Réessayez dans un instant.");
     } finally {
       setEnCours(false);
     }
@@ -1817,7 +2421,7 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
         </p>
 
         <h2 className="text-base font-semibold mb-1">
-          {etat === "code_perime" ? "Nouveau code" : "Code de l'effectif"}
+          {etat === "code_perime" ? `Nouveau code ${espace}` : `Code de l'effectif ${espace}`}
         </h2>
         <p className="text-sm mb-6" style={{ color: C.ink70 }}>
           {etat === "code_perime"
@@ -1834,7 +2438,7 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
           spellCheck={false}
           onChange={(e) => setCode(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && valider()}
-          aria-label="Code de l'effectif"
+          aria-label={`Code de l'effectif ${espace}`}
           className="w-full border rounded-md px-3 py-3 text-base"
           style={styleInput}
         />
@@ -1883,11 +2487,18 @@ function Deverrouillage({ etat, ouvrir, coller, annuler }) {
           )}
         </div>
 
-        {annuler && (
-          <button onClick={annuler} className="mt-6 text-sm" style={{ color: C.ink70 }}>
-            Revenir à l'application
-          </button>
-        )}
+        <div className="mt-6 flex flex-col items-start gap-3 text-sm">
+          {annuler && (
+            <button onClick={annuler} style={{ color: C.ink70 }}>
+              Revenir à l'application
+            </button>
+          )}
+          {changerEspace && (
+            <button onClick={() => changerEspace(espace === "U9" ? "U11" : "U9")} style={{ color: C.terrain }}>
+              Je n'encadre pas les {espace} : passer aux {espace === "U9" ? "U11" : "U9"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2034,6 +2645,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
   const samedi = plateau.date && new Date(plateau.date + "T12:00").getDay() === 6;
   const [suppression, setSuppression] = useState(false);
   const [choixNiveau, setChoixNiveau] = useState(false);
+  const niveaux = reglesDe(plateau).niveaux;
 
   const choix = (actif) => ({
     borderColor: actif ? C.terrain : C.ligne,
@@ -2048,9 +2660,9 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           plateau par le sélecteur du haut, et de niveau par le crayon. */}
       <div className="flex items-center gap-2 mb-5">
         <h2 className="text-lg font-semibold" style={{ color: C.terrain }}>
-          Plateau {plateau.niveau}
+          Plateau {nomNiveau(plateau)}
         </h2>
-        {!choixNiveau && (
+        {!choixNiveau && niveaux.length > 1 && (
           <button onClick={() => setChoixNiveau(true)} aria-label="Changer le niveau"
             className="p-1.5 rounded-md border" style={{ borderColor: C.ligne, color: C.terrain }}>
             <Pencil size={14} />
@@ -2062,7 +2674,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
         <div className="rounded-lg border p-3 mb-5" style={{ borderColor: C.terrain, background: C.papier }}>
           <p className="text-xs mb-2" style={{ color: C.ink70 }}>Niveau de ce plateau</p>
           <div className="flex flex-wrap gap-2">
-            {NIVEAUX.map((n) => {
+            {niveaux.map((n) => {
               const pris = niveauxPris.includes(n);
               return (
                 <button key={n} disabled={pris}
@@ -2091,17 +2703,6 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           avant de composer les équipes.
         </div>
       )}
-
-      <Champ label="Type de plateau" choix>
-        <div className="flex gap-2">
-          {Object.keys(TYPES_PLATEAU).map((t) => (
-            <button key={t} onClick={() => setPlateau({ ...plateau, type: t })}
-              className="px-4 py-2 rounded-md border text-sm" style={choix(plateau.type === t)}>
-              {TYPES_PLATEAU[t].label}
-            </button>
-          ))}
-        </div>
-      </Champ>
 
       <Champ label="Date" aide={plateau.date && !samedi ? "Cette date n'est pas un samedi." : null}>
         <input type="date" value={plateau.date} onChange={maj("date")}
@@ -2145,7 +2746,7 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           ) : (
             <div className="rounded-lg border p-3 text-sm"
               style={{ borderColor: C.alerte, background: C.alerteSoft }}>
-              <p className="font-medium mb-2">Supprimer le plateau {plateau.niveau} et ses équipes ?</p>
+              <p className="font-medium mb-2">Supprimer le plateau {nomNiveau(plateau)} et ses équipes ?</p>
               <div className="flex gap-2">
                 <button onClick={supprimer} className="px-3 py-1.5 rounded-md text-sm"
                   style={{ background: C.alerte, color: "#fff" }}>Supprimer</button>
@@ -2180,8 +2781,7 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
             </button>
           );
         })}
-        {feuilles.length < MAX_PLATEAUX &&
-          NIVEAUX.some((n) => !feuilles.some((f) => f.plateau.niveau === n)) && (
+        {ajouter && (
           <button onClick={ajouter}
             className="shrink-0 px-4 py-2.5 rounded-full border border-dashed text-sm flex items-center gap-1 whitespace-nowrap"
             style={{ borderColor: C.terrain, color: C.terrain }}>
@@ -2201,7 +2801,8 @@ function VueEquipes({
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
 }) {
   const [recherche, setRecherche] = useState("");
-  const categoriesJoueurs = TYPES_PLATEAU[plateau.type].categoriesJoueurs;
+  const regles = reglesDe(plateau);
+  const categoriesJoueurs = regles.categoriesJoueurs;
   const [categoriesVisibles, setCategoriesVisibles] = useState(() =>
     Object.fromEntries(categoriesJoueurs.map((c) => [c, true]))
   );
@@ -2261,6 +2862,7 @@ function VueEquipes({
 
   return (
     <section>
+      {regles.maxEquipes > 1 && (
       <div className="flex items-center gap-2 mb-4 overflow-x-auto">
         {equipes.map((e) => {
           const actif = e.id === active?.id;
@@ -2277,13 +2879,14 @@ function VueEquipes({
             </button>
           );
         })}
-        {equipes.length < MAX_EQUIPES && (
+        {equipes.length < regles.maxEquipes && (
           <button onClick={ajouterEquipe} className="px-3 py-2 rounded-md border text-sm flex items-center gap-1"
             style={{ borderColor: C.ligne, color: C.ink70 }}>
             <Plus size={14} /> Équipe
           </button>
         )}
       </div>
+      )}
 
       {active && (
         <>
@@ -2304,28 +2907,37 @@ function VueEquipes({
               <button onClick={allerEffectif}
                 className="w-full rounded-md border border-dashed px-3 py-2 text-sm text-left mb-3"
                 style={{ borderColor: C.ligne, color: C.ink70 }}>
-                Aucun délégué enregistré — en ajouter dans Effectif
+                Aucun adulte enregistré — en ajouter dans Effectif (catégorie Délégué)
               </button>
-            ) : (
-              <select value={active.delegueId || ""}
-                onChange={(e) => majEquipe(active.id, { delegueId: e.target.value || null })}
+            ) : (regles.encadrement === "delegue" ? [["delegueId", "Délégué"]]
+              : [["dirigeantId", "Dirigeant"], ["educateurId", "Éducateur"]]).map(([role, libelle]) => (
+              <select key={role} value={active[role] || ""} aria-label={libelle}
+                onChange={(e) => majEquipe(active.id, { [role]: e.target.value || null })}
                 className="w-full border rounded-md px-3 py-2 text-sm mb-3" style={styleInput}>
-                <option value="">Délégué — à désigner</option>
+                <option value="">{libelle} — à désigner</option>
                 {delegues.map((d) => {
-                  /* Pas de blocage (un parent peut dépanner), mais on le signale. */
+                  /* Pas de blocage (un parent peut dépanner), mais on le signale ;
+                     une même personne ne tient pas deux rôles dans l'équipe. */
                   const ailleurs = (delegations[d.id] || []).filter((p) => p.equipe.id !== active.id);
+                  const autreRole = ROLES.some((r) => r !== role && r !== "capitaineId" && active[r] === d.id);
                   return (
-                    <option key={d.id} value={d.id}>
+                    <option key={d.id} value={d.id} disabled={autreRole}>
                       {d.nom} {d.prenom}{d.licence ? ` — ${d.licence}` : ""}
                       {d.valide ? "" : " (licence non validée)"}
+                      {autreRole ? " — déjà dans l'encadrement" : ""}
                       {ailleurs.length ? ` — déjà : ${ailleurs.map((p) => nomPlace(p, null)).join(", ")}` : ""}
                     </option>
                   );
                 })}
               </select>
-            )}
+            ))}
 
-            <JaugeEquipe n={active.joueurs.length} />
+            <JaugeEquipe n={active.joueurs.length} regles={regles} />
+            {regles.capitaine && active.joueurs.length > 0 && !active.capitaineId && (
+              <p className="text-xs mt-2" style={{ color: C.brassard }}>
+                Touchez « C » pour désigner le capitaine.
+              </p>
+            )}
 
             {active.joueurs.length > 0 && (
               <ol className="mt-3 pt-3 border-t space-y-1 text-sm" style={{ borderColor: C.ligne }}>
@@ -2340,6 +2952,18 @@ function VueEquipes({
                         <span className="text-xs ml-1.5" style={{ color: C.ink70 }}>{j.categorie}</span>
                       </span>
                       {j.feminine && <BadgeFeminine />}
+                      {regles.capitaine && (
+                        <button onClick={() => majEquipe(active.id, {
+                            capitaineId: active.capitaineId === id ? null : id })}
+                          aria-label={`Capitaine : ${j.prenom} ${j.nom}`}
+                          aria-pressed={active.capitaineId === id}
+                          className="w-6 h-6 rounded-full border text-xs font-bold shrink-0"
+                          style={active.capitaineId === id
+                            ? { background: C.terrain, borderColor: C.terrain, color: "#fff" }
+                            : { borderColor: C.ligne, color: C.ink70 }}>
+                          C
+                        </button>
+                      )}
                       <button onClick={() => basculer(active.id, id)} aria-label="Retirer de l'équipe"
                         style={{ color: C.ink70 }}>
                         <X size={14} />
@@ -2400,7 +3024,7 @@ function VueEquipes({
                   const dans = affectation[j.id];
                   const ici = dans?.equipe.id === active.id;
                   const bloque = dans && !ici;
-                  const complet = !ici && active.joueurs.length >= MAX_JOUEURS;
+                  const complet = !ici && active.joueurs.length >= regles.maxJoueurs;
                   return (
                     <li key={j.id}>
                       <button onClick={() => !bloque && !complet && basculer(active.id, j.id)}
@@ -2450,23 +3074,24 @@ function VueEquipes({
   );
 }
 
-function JaugeEquipe({ n }) {
-  const manque = MIN_JOUEURS - n;
+function JaugeEquipe({ n, regles = TYPES_PLATEAU.U9 }) {
+  const { minJoueurs: mini, maxJoueurs: maxi } = regles;
+  const manque = mini - n;
   const message =
     n === 0
       ? "Aucun joueur"
       : manque > 0
-      ? `Il manque ${manque} joueur${manque > 1 ? "s" : ""} pour jouer à 5`
-      : n === MAX_JOUEURS
-      ? "Équipe au complet (5 + 3 remplaçants)"
-      : `${n} joueurs · ${n - MIN_JOUEURS} remplaçant${n - MIN_JOUEURS > 1 ? "s" : ""}`;
+      ? `Il manque ${manque} joueur${manque > 1 ? "s" : ""} pour jouer à ${mini}`
+      : n === maxi
+      ? `Équipe au complet (${mini} + ${maxi - mini} remplaçants)`
+      : `${n} joueurs · ${n - mini} remplaçant${n - mini > 1 ? "s" : ""}`;
   const couleur = manque > 0 ? C.brassard : C.terrain;
   return (
     <div className="flex items-center gap-2 text-xs" style={{ color: couleur }}>
       <div className="flex gap-1">
-        {Array.from({ length: MAX_JOUEURS }, (_, i) => (
-          <span key={i} className="w-4 h-1.5 rounded-full"
-            style={{ background: i < n ? couleur : C.ligne, opacity: i >= MIN_JOUEURS ? 0.6 : 1 }} />
+        {Array.from({ length: maxi }, (_, i) => (
+          <span key={i} className={`${maxi > 8 ? "w-3" : "w-4"} h-1.5 rounded-full`}
+            style={{ background: i < n ? couleur : C.ligne, opacity: i >= mini ? 0.6 : 1 }} />
         ))}
       </div>
       {message}
@@ -2478,11 +3103,22 @@ function JaugeEquipe({ n }) {
 /*  Vue Effectif — import / export CSV                                 */
 /* ------------------------------------------------------------------ */
 function VueEffectif({
-  effectif, setEffectif, affectation, retirer, modifier, aPublier, modificationsEnAttente,
+  espace = "U9", effectif, setEffectif, affectation, retirer, modifier, aPublier, modificationsEnAttente,
   publier, publicationOuverte, setPublicationOuverte, etat, demanderCode, oublierCode,
 }) {
   const fichier = useRef(null);
   const [message, setMessage] = useState(null);
+  const categories = TYPES_PLATEAU[espace].categoriesJoueurs;
+
+  /* Un import ne garde que les joueurs de l'espace (et les adultes). */
+  const deLEspace = (personnes) => {
+    const gardees = personnes.filter((p) => estDelegue(p) || categories.includes(p.categorie));
+    return { gardees, horsEspace: personnes.length - gardees.length };
+  };
+  const bilanEspace = (ajoutes, majs, ignorees, horsEspace) =>
+    bilan(ajoutes, majs, ignorees) + (horsEspace
+      ? ` ${horsEspace} joueur${horsEspace > 1 ? "s" : ""} d'une autre catégorie ignoré${horsEspace > 1 ? "s" : ""}.`
+      : "");
   const [replis, setReplis] = useState(null);
   const [exempleOuvert, setExempleOuvert] = useState(false);
   const [ajout, setAjout] = useState(null);
@@ -2548,9 +3184,10 @@ function VueEffectif({
         setMessage({ ton: "alerte", texte: erreur || "Aucune ligne lisible dans ce fichier." });
         return;
       }
-      const { liste, ajoutes, majs } = fusion(effectif, personnes);
+      const { gardees, horsEspace } = deLEspace(personnes);
+      const { liste, ajoutes, majs } = fusion(effectif, gardees);
       setEffectif(liste);
-      setMessage({ ton: "ok", texte: bilan(ajoutes, majs, ignorees?.length || 0) });
+      setMessage({ ton: "ok", texte: bilanEspace(ajoutes, majs, ignorees?.length || 0, horsEspace) });
     };
     lecteur.readAsText(f, "utf-8");
     evt.target.value = "";
@@ -2562,9 +3199,10 @@ function VueEffectif({
       setMessage({ ton: "alerte", texte: erreur || "Aucune ligne lisible dans ce texte." });
       return;
     }
-    const { liste, ajoutes, majs } = fusion(effectif, personnes);
+    const { gardees, horsEspace } = deLEspace(personnes);
+    const { liste, ajoutes, majs } = fusion(effectif, gardees);
     setEffectif(liste);
-    setMessage({ ton: "ok", texte: bilan(ajoutes, majs, ignorees?.length || 0) });
+    setMessage({ ton: "ok", texte: bilanEspace(ajoutes, majs, ignorees?.length || 0, horsEspace) });
     setCollageOuvert(false);
     setTexteColle("");
   };
@@ -2577,7 +3215,7 @@ function VueEffectif({
 
   const compte = (c) => effectif.filter((p) => p.categorie === c).length;
 
-  const ordre = Object.fromEntries([...CATEGORIES, DELEGUE].map((c, i) => [c, i]));
+  const ordre = Object.fromEntries([...categories, DELEGUE].map((c, i) => [c, i]));
   const liste = useMemo(
     () => effectif.slice().sort((a, b) =>
       (ordre[a.categorie] ?? 99) - (ordre[b.categorie] ?? 99) || parNom(a, b)
@@ -2675,13 +3313,13 @@ function VueEffectif({
 
       <div className="flex items-center justify-between mb-3 text-sm">
         <span style={{ color: C.ink70 }}>
-          {CATEGORIES.map((c) => `${c} ${compte(c)}`).join(" · ")} · délégués {compte(DELEGUE)}
+          {categories.map((c) => `${c} ${compte(c)}`).join(" · ")} · délégués {compte(DELEGUE)}
         </span>
         <div className="flex gap-3">
           <button onClick={() => {
             setEdition(null);
             setErreurFiche(null);
-            setAjout({ nom: "", prenom: "", categorie: "U8", licence: "", naissance: "", valide: true, feminine: false });
+            setAjout({ nom: "", prenom: "", categorie: categories[0], licence: "", naissance: "", valide: true, feminine: false });
           }}
             className="flex items-center gap-1" style={{ color: C.terrain }}>
             <Plus size={14} /> Ajouter
@@ -2721,6 +3359,7 @@ function VueEffectif({
 
       {ajout && (
         <FormulairePersonne
+          categories={categories}
           valeur={ajout}
           setValeur={setAjout}
           erreur={erreurFiche}
@@ -2749,6 +3388,7 @@ function VueEffectif({
           {liste.map((p) => (edition?.id === p.id ? (
             <li key={p.id}>
               <FormulairePersonne
+                categories={categories}
                 valeur={edition.valeur}
                 setValeur={(valeur) => setEdition({ ...edition, valeur })}
                 erreur={erreurFiche}
@@ -2883,7 +3523,7 @@ function Publication({ aPublier, total, codeConnu, ouverte, ouvrir, fermer, publ
   );
 }
 
-function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erreur }) {
+function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erreur, categories = CATEGORIES }) {
   const maj = (k) => (e) => setValeur({ ...valeur, [k]: e.target.value });
   const delegue = valeur.categorie === DELEGUE;
   return (
@@ -2900,7 +3540,8 @@ function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erre
           className="border rounded-md px-3 py-2 text-sm" style={styleInput} />
         <select value={valeur.categorie} onChange={maj("categorie")}
           className="border rounded-md px-3 py-2 text-sm" style={styleInput}>
-          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          {[...new Set([...categories, valeur.categorie])].filter((c) => c && c !== DELEGUE)
+            .map((c) => <option key={c} value={c}>{c}</option>)}
           <option value={DELEGUE}>{DELEGUE}</option>
         </select>
         <label className="flex items-center gap-2 text-sm px-1">
@@ -2947,9 +3588,16 @@ const heureRdv = (hhmm) => {
   return `${Number(h)} H ${m}`;
 };
 
-/* Ce que montre l'image, sans rien dessiner. Deux convoqués au même prénom
-   se distinguent par l'initiale du nom et la catégorie : « JULES D U9 ». */
+/* Ce que montre l'image, sans rien dessiner. Une convocation ne réunit que
+   des plateaux d'un même type (U9 ensemble, U11 à part). Deux convoqués au
+   même prénom, dans cette convocation, se distinguent par l'initiale du nom
+   et la catégorie : « JULES D. (U9) ». */
 function modeleConvocation(feuilles, personneDe, tenue) {
+  const u11 = feuilles[0] && reglesDe(feuilles[0].plateau).encadrement !== "delegue";
+  const prenomDe = (id) => {
+    const p = id ? personneDe(id) : null;
+    return p ? (p.prenom || p.nom).toUpperCase() : "";
+  };
   const convoques = feuilles.flatMap((f) =>
     f.equipes.flatMap((e) => e.joueurs.map(personneDe).filter(Boolean)));
   const parPrenom = {};
@@ -2971,17 +3619,18 @@ function modeleConvocation(feuilles, personneDe, tenue) {
     lieu: (plateau.lieu || "").toUpperCase(),
     adresse: (plateau.adresse || "").toUpperCase(),
     heure: heureRdv(plateau.heureRdv),
-    equipes: equipes.map((e) => {
-      const d = e.delegueId ? personneDe(e.delegueId) : null;
-      return {
-        joueurs: e.joueurs.map(personneDe).filter(Boolean).map(appel),
-        educateur: d ? (d.prenom || d.nom).toUpperCase() : "",
-      };
-    }),
+    equipes: equipes.map((e) => ({
+      joueurs: e.joueurs.map(personneDe).filter(Boolean).map(appel),
+      /* Une ligne par rôle d'encadrement, dans l'ordre de `encadrement`. */
+      encadrement: u11
+        ? [prenomDe(e.dirigeantId), prenomDe(e.educateurId)]
+        : [prenomDe(e.delegueId)],
+    })),
   }));
   const dates = [...new Set(feuilles.map((f) => f.plateau.date).filter(Boolean))];
   return {
     date: dates.map(dateCourte).join(" / "),
+    encadrement: u11 ? ["DIRIGEANT", "EDUCATEUR"] : ["EDUCATEURS"],
     plateaux,
     lignes: Math.max(1, ...plateaux.flatMap((p) => p.equipes.map((e) => e.joueurs.length))),
     tenue: tenue || "",
@@ -3005,11 +3654,13 @@ const COULEURS_CONVOCATION = {
 function dessinerConvocation(toile, m, logo = null) {
   const K = COULEURS_CONVOCATION;
   const L_LIBELLE = 300;
-  const L_COLONNE = 250;
   const JOINT = 7;
   const JOINT_FIN = 2;
   const police = (t) => `bold ${t}px "Times New Roman", Times, serif`;
   const colonnes = m.plateaux.reduce((n, p) => n + p.equipes.length, 0);
+  /* Une seule équipe (U11) : une colonne large, pour que le bandeau tienne. */
+  const L_COLONNE = colonnes === 1 ? 560 : 250;
+  const encadrement = m.encadrement || ["EDUCATEURS"];
   const largeur = L_LIBELLE + colonnes * L_COLONNE + JOINT;
 
   const mesure = toile.getContext("2d");
@@ -3040,7 +3691,7 @@ function dessinerConvocation(toile, m, logo = null) {
     { cle: "rdv", h: 70 },
     { cle: "titre", h: 76 },
     ...Array.from({ length: m.lignes }, (_, i) => ({ cle: "joueur", i, h: 60 })),
-    { cle: "educateurs", h: 90 },
+    ...encadrement.map((libelle, i) => ({ cle: "encadrement", libelle, i, h: encadrement.length > 1 ? 76 : 90 })),
     { cle: "tenue", h: Math.max(96, lignesTenue * 38 + 30) },
     { cle: "slogan", h: 110 },
   ];
@@ -3179,9 +3830,9 @@ function dessinerConvocation(toile, m, logo = null) {
         parEquipe(y, h, K.blanc, (e) => e.joueurs[r.i]?.nom || "",
           { taille: 28, haut: r.i ? JOINT_FIN : JOINT, petit: (e) => e.joueurs[r.i]?.categorie || "" });
         break;
-      case "educateurs":
-        caseTexte(0, y, L_LIBELLE, h, K.bleu, "EDUCATEURS");
-        parEquipe(y, h, K.bleu, (e) => e.educateur, { taille: 34 });
+      case "encadrement":
+        caseTexte(0, y, L_LIBELLE, h, K.bleu, r.libelle);
+        parEquipe(y, h, K.bleu, (e) => (e.encadrement || [e.educateur])[r.i] || "", { taille: 34 });
         break;
       case "tenue":
         caseTexte(0, y, L_LIBELLE, h, K.bleu, "TENUES");
@@ -3232,7 +3883,8 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
     return () => { annule = true; };
   }, [modele, logo]);
 
-  const nomFichier = `convocation-${feuilles[0]?.plateau.date || "samedi"}.png`;
+  const type = feuilles[0]?.plateau.type || "U9";
+  const nomFichier = `convocation-${type.toLowerCase()}-${feuilles[0]?.plateau.date || "samedi"}.png`;
 
   const partager = async () => {
     setMessage(null);
@@ -3264,14 +3916,22 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
 
   const problemes = [];
   feuilles.forEach(({ plateau, equipes }) => {
-    const qui = plateau.niveau;
+    const qui = nomNiveau(plateau);
+    const r = reglesDe(plateau);
     if (!plateau.date) problemes.push(`${qui} : la date n'est pas renseignée.`);
     if (!plateau.lieu) problemes.push(`${qui} : le lieu n'est pas renseigné.`);
     if (!plateau.adresse) problemes.push(`${qui} : l'adresse n'est pas renseignée.`);
     if (!plateau.heureRdv) problemes.push(`${qui} : l'heure du rendez-vous n'est pas renseignée.`);
     equipes.forEach((e) => {
       if (!e.joueurs.length) problemes.push(`${e.nom} : aucun joueur convoqué.`);
-      if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
+      else if (r.encadrement !== "delegue" && e.joueurs.length < r.minJoueurs)
+        problemes.push(`${e.nom} : ${e.joueurs.length} joueur(s) convoqué(s), il en faut au moins ${r.minJoueurs}.`);
+      if (r.encadrement === "delegue") {
+        if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
+      } else {
+        if (!e.dirigeantId) problemes.push(`${e.nom} : dirigeant non désigné.`);
+        if (!e.educateurId) problemes.push(`${e.nom} : éducateur non désigné.`);
+      }
     });
   });
 
@@ -3325,6 +3985,32 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
 /* ------------------------------------------------------------------ */
 /*  Feuille de match — aperçu en iframe, impression depuis l'iframe    */
 /* ------------------------------------------------------------------ */
+/* Ce qui manque avant d'imprimer la feuille, selon les règles du type. */
+function problemesFeuille(plateau, equipes, personneDe) {
+  const r = reglesDe(plateau);
+  const problemes = [];
+  if (!plateau.lieu) problemes.push("Le lieu du plateau n'est pas renseigné.");
+  if (!plateau.date) problemes.push("La date du plateau n'est pas renseignée.");
+  equipes.forEach((e) => {
+    if (e.joueurs.length < r.minJoueurs)
+      problemes.push(`${e.nom} : ${e.joueurs.length} joueur(s), il en faut au moins ${r.minJoueurs}.`);
+    if (e.joueurs.length > r.maxJoueurs)
+      problemes.push(`${e.nom} : ${e.joueurs.length} joueurs, ${r.maxJoueurs} au plus.`);
+    if (r.encadrement === "delegue") {
+      if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
+    } else {
+      if (!e.dirigeantId) problemes.push(`${e.nom} : dirigeant non désigné.`);
+      if (!e.educateurId) problemes.push(`${e.nom} : éducateur non désigné.`);
+    }
+    if (r.capitaine && !e.capitaineId) problemes.push(`${e.nom} : capitaine non désigné.`);
+    e.joueurs.forEach((id) => {
+      const j = personneDe(id);
+      if (j && !j.valide) problemes.push(`${j.nom} ${j.prenom} : licence non validée.`);
+    });
+  });
+  return problemes;
+}
+
 function VueFeuille({ plateau, equipes, personneDe }) {
   const cadre = useRef(null);
   const [hauteur, setHauteur] = useState(600);
@@ -3354,7 +4040,9 @@ function VueFeuille({ plateau, equipes, personneDe }) {
       const url = URL.createObjectURL(new Blob([octets], { type: "application/pdf" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `feuille-${plateau.date || "date"}-${enSlug(plateau.niveau) || "plateau"}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
+      a.download = plateau.type === "U11"
+        ? `feuille-${plateau.date || "date"}-u11-${enSlug(plateau.lieu) || "lieu"}.pdf`
+        : `feuille-${plateau.date || "date"}-${enSlug(plateau.niveau) || "plateau"}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -3367,18 +4055,7 @@ function VueFeuille({ plateau, equipes, personneDe }) {
     }
   };
 
-  const problemes = [];
-  if (!plateau.lieu) problemes.push("Le lieu du plateau n'est pas renseigné.");
-  if (!plateau.date) problemes.push("La date du plateau n'est pas renseignée.");
-  equipes.forEach((e) => {
-    if (e.joueurs.length < MIN_JOUEURS)
-      problemes.push(`${e.nom} : ${e.joueurs.length} joueur(s), il en faut au moins ${MIN_JOUEURS}.`);
-    if (!e.delegueId) problemes.push(`${e.nom} : délégué non désigné.`);
-    e.joueurs.forEach((id) => {
-      const j = personneDe(id);
-      if (j && !j.valide) problemes.push(`${j.nom} ${j.prenom} : licence non validée.`);
-    });
-  });
+  const problemes = problemesFeuille(plateau, equipes, personneDe);
 
   return (
     <section>
