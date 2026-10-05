@@ -33,13 +33,13 @@ const MIN_JOUEURS = 5;   // 4 joueurs de champ + 1 gardien
 const MAX_JOUEURS = 8;   // + 3 remplaçants
 const MAX_EQUIPES = 8;   // la feuille du district : 4 blocs par page, sur deux pages
 const DELEGUE = "Délégué";
-/* Catégories de joueurs que l'application sait lire ; chaque espace (U9,
-   U11) n'en garde que les siennes. Les adultes sont « Délégué ». */
-const CATEGORIES = ["U8", "U9", "U10", "U11"];
+/* Catégories de joueurs que l'application sait lire ; chaque espace (U7,
+   U9, U11) n'en garde que les siennes. Les adultes sont « Délégué ». */
+const CATEGORIES = ["U6", "U7", "U8", "U9", "U10", "U11"];
 
 /* L'application du club est divisée en espaces, un par catégorie : chaque
    coach travaille dans le sien (plateaux, équipes, effectif, documents). */
-const ESPACES = ["U9", "U11"];
+const ESPACES = ["U7", "U9", "U11"];
 const CLE_ESPACE = "feuilles:espace";
 
 const CLE_EFFECTIF = "feuilles:effectif";
@@ -70,10 +70,38 @@ const INTERVALLE_VERIFICATION = 5 * 60 * 1000;
 /* Les règles de chaque espace : catégories de joueurs, effectif d'une
    équipe, nombre d'équipes, niveaux et encadrement. Le champ `type` d'un
    plateau est celui de son espace.
+   - U7 : plateaux U6/U7 à 4, jusqu'à quatre équipes, un délégué chacune ;
    - U9 : plateaux U8/U9 à 5, plusieurs équipes, un délégué chacune ;
    - U11 : plateau U10/U11 à 8, une seule équipe de 12 au plus, un
-     capitaine, un dirigeant et un éducateur. */
+     capitaine, un dirigeant et un éducateur.
+   `feuille` décrit la feuille de match « à blocs » du District, commune
+   aux U7 et aux U9 à quelques détails près (feuilleHTML, pagePremiere…) ;
+   la feuille U11 suit un autre modèle. */
 const TYPES_PLATEAU = {
+  U7: {
+    label: "U7",
+    description: "U6 et U7",
+    categoriesJoueurs: ["U6", "U7"],
+    minJoueurs: 4,      // 3 joueurs de champ + 1 gardien
+    maxJoueurs: 6,      // + 2 remplaçants
+    maxEquipes: 4,
+    niveaux: ["Niveau 1", "Niveau 2", "Niveau 3"],
+    encadrement: "delegue",
+    capitaine: false,
+    feuille: {
+      format: "Football à 4",
+      mention: "U7",                 // sous l'image de l'encart
+      image: "Im4",
+      largeurImage: 70,              // dans l'encart du PDF, en points
+      hauteurEncart: 152,
+      rangees: 3,                    // de deux blocs d'équipe par page
+      lignes: 6,                     // de joueurs par bloc
+      section: false,                // « SECTION FOOTBALL des … » au pied de la page 1
+      responsable: false,            // ligne « RESPONSABLE Du PLATEAU » et « T.S.V.P. »
+      secondePageToujours: true,     // les blocs de la page 2 sont toujours imprimés
+      signature: "Nom et signature du Responsable de plateau :",
+    },
+  },
   U9: {
     label: "U9",
     description: "U8 et U9",
@@ -84,6 +112,19 @@ const TYPES_PLATEAU = {
     niveaux: ["Niveau 2", "Intersecteur"],
     encadrement: "delegue",
     capitaine: false,
+    feuille: {
+      format: "FOOTBALL à 5 (U8 / U9)",
+      mention: "",
+      image: "Im3",
+      largeurImage: 112,
+      hauteurEncart: 96,
+      rangees: 2,
+      lignes: MAX_JOUEURS,
+      section: true,
+      responsable: true,
+      secondePageToujours: false,
+      signature: "Signature du Responsable de plateau :",
+    },
   },
   U11: {
     label: "U11",
@@ -606,22 +647,25 @@ function resumeEcart(e) {
 const jourMois = (iso) => (iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : "");
 
 /* ------------------------------------------------------------------ */
-/*  Feuille de match — mise en page du modèle officiel du District      */
-/*  Mosellan (football à 5). Deux pages : 4 blocs d'équipe par page.    */
-/*  L'aperçu HTML et le PDF suivent la même géométrie.                  */
+/*  Feuille de match « à blocs » — modèle officiel du District Mosellan  */
+/*  pour le football à 5 (U8/U9 : 4 blocs de 8 joueurs par page) et à 4  */
+/*  (U7 : 6 blocs de 6 joueurs). Ce qui change d'une catégorie à        */
+/*  l'autre est décrit par TYPES_PLATEAU[…].feuille. Deux pages ;       */
+/*  l'aperçu HTML et le PDF suivent la même géométrie.                  */
 /* ------------------------------------------------------------------ */
-const BLOCS_PAR_PAGE = 4;   // quatre blocs d'équipe par page, comme sur le modèle
+const modeleFeuille = (plateau) => reglesDe(plateau).feuille;
+const blocsParPage = (m) => m.rangees * 2;
 
 const intitule = (type) => TYPES_PLATEAU[type].categoriesJoueurs.join(" / ");
 
 const dateFrancaise = (iso) =>
   iso ? new Date(iso + "T12:00").toLocaleDateString("fr-FR") : "";
 
-/* Les quatre emplacements de la page existent toujours : sur le modèle
+/* Tous les emplacements de la page existent toujours : sur le modèle
    papier ils sont vides, le responsable de plateau peut les remplir. */
-function blocsDePage(equipes, page) {
-  const debut = page * BLOCS_PAR_PAGE;
-  return Array.from({ length: BLOCS_PAR_PAGE }, (_, i) => equipes[debut + i] || null);
+function blocsDePage(equipes, page, m) {
+  const debut = page * blocsParPage(m);
+  return Array.from({ length: blocsParPage(m) }, (_, i) => equipes[debut + i] || null);
 }
 
 /* ------------------------------------------------------------------ */
@@ -640,6 +684,7 @@ const CSS_FEUILLE = `
   .fm-encart .cat { font-family: "Courier New", Courier, monospace; font-size: 11pt; }
   .fm-encart .titre { font-family: Impact, Haettenschweiler, "Franklin Gothic Bold", Charcoal, "Helvetica Inserat", "Bitstream Vera Sans Bold", "Arial Black", "sans serif"; color: #000; font-weight: bold; font-size: 13pt; margin: 1mm 0 1mm; }
   .fm-encart img { width: 40mm; display: block; margin: 1mm auto 0; }
+  .fm-encart .mention { font-weight: bold; font-size: 15pt; }
   .fm-titre { text-align: center; font-weight: bold; font-size: 14pt; margin: 0 0 3mm; }
 
   .fm-grille { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -689,8 +734,8 @@ const esc = (s) =>
 
 const jpeg = (img) => `data:image/jpeg;base64,${img.b64}`;
 
-function blocHTML(equipe, personneDe) {
-  const lignes = Array.from({ length: MAX_JOUEURS }, (_, i) => {
+function blocHTML(equipe, personneDe, m) {
+  const lignes = Array.from({ length: m.lignes }, (_, i) => {
     const j = equipe ? personneDe(equipe.joueurs[i]) : null;
     const nom = j ? `${esc(j.nom)} ${esc(j.prenom)}` : "";
     return `<tr><td><span class="num">${i + 1}</span><span class="nom">${nom}</span></td>
@@ -713,11 +758,11 @@ function blocHTML(equipe, personneDe) {
     </table>`;
 }
 
-function grilleHTML(equipes, page, personneDe) {
-  const b = blocsDePage(equipes, page).map((e) => blocHTML(e, personneDe));
-  return `<table class="fm-grille"><tbody>
-      <tr><td>${b[0]}</td><td>${b[1]}</td></tr>
-      <tr><td>${b[2]}</td><td>${b[3]}</td></tr>
+function grilleHTML(equipes, page, personneDe, m) {
+  const b = blocsDePage(equipes, page, m).map((e) => blocHTML(e, personneDe, m));
+  const rangees = Array.from({ length: m.rangees }, (_, r) => `
+      <tr><td>${b[2 * r]}</td><td>${b[2 * r + 1]}</td></tr>`).join("");
+  return `<table class="fm-grille"><tbody>${rangees}
     </tbody></table>`;
 }
 
@@ -861,22 +906,27 @@ function feuilleU11HTML(plateau, equipes, personneDe) {
 
 function feuilleHTML(plateau, equipes, personneDe) {
   if (plateau.type === "U11") return feuilleU11HTML(plateau, equipes, personneDe);
+  const m = modeleFeuille(plateau);
   const cat = intitule(plateau.type);
-  const secondePage = equipes.length > BLOCS_PAR_PAGE;
+  const secondePage = m.secondePageToujours || equipes.length > blocsParPage(m);
+  const image = imageFeuille(m.image);
+  /* Même proportion que dans l'encart du PDF (112 pt ↔ 40 mm). */
+  const largeurImage = `${((m.largeurImage * 40) / 112).toFixed(1)}mm`;
 
   const entete = `
     <div class="fm-haut">
       <img class="district" src="${jpeg(IMG_DISTRICT)}" alt="District Mosellan de Football">
       <img class="grandir" src="${jpeg(IMG_GRANDIR)}" alt="Football des enfants — Jouer pour grandir">
       <div class="fm-encart">
-        <div class="cat">FOOTBALL à 5 (${esc(cat)})</div>
+        <div class="cat">${esc(m.format)}</div>
         <div class="titre">FEUILLE DE MATCH</div>
-        <img src="${jpeg(IMG_CRAMPONS)}" alt="">
+        <img src="${jpeg(image)}" alt="" style="width:${largeurImage}">
+        ${m.mention ? `<div class="mention">${esc(m.mention)}</div>` : ""}
       </div>
     </div>`;
 
   const infos = `
-    <div class="fm-section"><span>SECTION FOOTBALL des ${esc(cat)}</span></div>
+    ${m.section ? `<div class="fm-section"><span>SECTION FOOTBALL des ${esc(cat)}</span></div>` : '<div style="height:4mm"></div>'}
     <table class="fm-infos">
       <tr>
         <td width="16%"><b>SECTEUR DE :</b></td><td class="val" width="34%">&nbsp;${esc(plateau.secteur)}</td>
@@ -885,13 +935,13 @@ function feuilleHTML(plateau, equipes, personneDe) {
       <tr>
         <td><b>PLATEAU à :</b></td><td class="val">&nbsp;${esc(plateau.lieu)}</td>
         <td align="right"><b>DATE :</b></td><td class="val">&nbsp;${esc(dateFrancaise(plateau.date))}</td>
-      </tr>
+      </tr>${m.responsable ? `
       <tr>
         <td colspan="2"><b>RESPONSABLE Du PLATEAU :</b></td>
         <td class="val" colspan="2">&nbsp;${esc(plateau.responsable || "")}</td>
-      </tr>
+      </tr>` : ""}
     </table>
-    <div class="fm-tsvp">T.S.V.P.</div>`;
+    ${m.responsable ? '<div class="fm-tsvp">T.S.V.P.</div>' : ""}`;
 
   const bas = `
     <div class="fm-bloc-bas">
@@ -899,7 +949,7 @@ function feuilleHTML(plateau, equipes, personneDe) {
       <div class="trait"></div><div class="trait"></div>
       <div class="lab" style="margin-top:4mm">JOUEURS BLESSES (Nom, Prénom, Club, N° licence et Nature de la blessure) :</div>
       <div class="trait"></div><div class="trait"></div><div class="trait"></div>
-      <div class="lab" style="margin-top:6mm">Signature du Responsable de plateau :</div>
+      <div class="lab" style="margin-top:6mm">${esc(m.signature)}</div>
       <div style="height:16mm"></div>
     </div>`;
 
@@ -908,11 +958,11 @@ function feuilleHTML(plateau, equipes, personneDe) {
       <div class="fm-page">
         ${entete}
         <h3 class="fm-titre">Composition des équipes : ${esc(CLUB.nom)}</h3>
-        ${grilleHTML(equipes, 0, personneDe)}
+        ${grilleHTML(equipes, 0, personneDe, m)}
         ${infos}
       </div>
       <div class="fm-page">
-        ${secondePage ? grilleHTML(equipes, 1, personneDe) : ""}
+        ${secondePage ? grilleHTML(equipes, 1, personneDe, m) : ""}
         ${bas}
       </div>
     </div>`;
@@ -998,7 +1048,10 @@ function tronquer(s, maxi, taille, police = "F1") {
 const xG = MARGE;
 const xD = A4.l - MARGE;
 const LARGEUR_BLOC = (xD - xG) / 2;
-const HAUTEUR_BLOC = 208;
+const H_LIGNE_BLOC = 18.5;
+/* Titre et en-tête (52), les lignes de joueurs, puis le délégué (26,5) :
+   208 points pour les 8 lignes de la feuille U8/U9. */
+const hauteurBloc = (m) => 52 + (m.lignes - 1) * H_LIGNE_BLOC + 26.5;
 const PART_NOM = 0.58;          // part de la cellule réservée au nom
 
 function crayon() {
@@ -1060,11 +1113,12 @@ function crayon() {
 }
 
 /* Un bloc d'équipe, calqué sur les cases du modèle papier. */
-function blocPDF(p, equipe, personneDe, bx, bt) {
+function blocPDF(p, equipe, personneDe, bx, bt, m) {
   const cw = LARGEUR_BLOC;
+  const hBloc = hauteurBloc(m);
   const xSep = bx + cw * PART_NOM;
 
-  p.cadre(bx, bt, cw, HAUTEUR_BLOC, 1.2);
+  p.cadre(bx, bt, cw, hBloc, 1.2);
 
   const etiquette = "Equipe : ";
   p.texte(bx + 5, bt + 14, 11, "F2", etiquette);
@@ -1074,11 +1128,10 @@ function blocPDF(p, equipe, personneDe, bx, bt) {
 
   p.centre(bx + (cw * PART_NOM) / 2, bt + 32, 10, "F1", "Nom Prénom");
   p.centre(xSep + (cw * (1 - PART_NOM)) / 2, bt + 32, 10, "F1", "N° Licence");
-  p.vertical(xSep, bt + 21, bt + HAUTEUR_BLOC, 1);
+  p.vertical(xSep, bt + 21, bt + hBloc, 1);
 
-  const hLigne = 18.5;
-  for (let i = 0; i < MAX_JOUEURS; i++) {
-    const hy = bt + 52 + i * hLigne;
+  for (let i = 0; i < m.lignes; i++) {
+    const hy = bt + 52 + i * H_LIGNE_BLOC;
     const j = equipe ? personneDe(equipe.joueurs[i]) : null;
     p.texte(bx + 5, hy, 10.5, "F1", String(i + 1));
     if (j) {
@@ -1091,7 +1144,7 @@ function blocPDF(p, equipe, personneDe, bx, bt) {
   }
 
   const d = equipe?.delegueId ? personneDe(equipe.delegueId) : null;
-  const hd = bt + HAUTEUR_BLOC - 8;
+  const hd = bt + hBloc - 8;
   p.texte(bx + 5, hd, 10, "F2", "Délégué :");
   if (d) {
     p.texte(bx + 52, hd, 10, "F1", tronquer(`${d.nom} ${d.prenom}`, xSep - bx - 58, 10, "F1"));
@@ -1099,18 +1152,18 @@ function blocPDF(p, equipe, personneDe, bx, bt) {
   }
 }
 
-function grillePDF(p, equipes, page, personneDe, htGrille) {
-  blocsDePage(equipes, page).forEach((e, i) => {
+function grillePDF(p, equipes, page, personneDe, htGrille, m) {
+  blocsDePage(equipes, page, m).forEach((e, i) => {
     const bx = xG + (i % 2) * LARGEUR_BLOC;
-    const bt = htGrille + Math.floor(i / 2) * HAUTEUR_BLOC;
-    blocPDF(p, e, personneDe, bx, bt);
+    const bt = htGrille + Math.floor(i / 2) * hauteurBloc(m);
+    blocPDF(p, e, personneDe, bx, bt, m);
   });
-  return htGrille + 2 * HAUTEUR_BLOC;
+  return htGrille + m.rangees * hauteurBloc(m);
 }
 
 function pagePremiere(plateau, equipes, personneDe) {
   const p = crayon();
-  const cat = intitule(plateau.type);
+  const m = modeleFeuille(plateau);
 
   /* En-tête : les trois visuels du modèle */
   p.image(IMAGES[0], xG + 4, 24, 74);
@@ -1119,26 +1172,29 @@ function pagePremiere(plateau, equipes, personneDe) {
   const encX = 405;
   const encL = xD - encX;
   const encT = 20;
-  const encH = 96;
+  const encH = m.hauteurEncart;
   p.aplat(encX, encT, encL, encH, "0.8");
   p.cadre(encX, encT, encL, encH, 0.8);
   const encMil = encX + encL / 2;
-  p.centre(encMil, encT + 18, 11, "F3", `FOOTBALL à 5 (${cat})`);
-  //p.rouge(true);
+  p.centre(encMil, encT + 18, 11, "F3", m.format);
   p.centre(encMil, encT + 40, 14, "F2", "FEUILLE DE MATCH");
-  //p.rouge(false);
-  p.image(IMAGES[2], encMil - 56, encT + 48, 112);
+  p.image(imageFeuille(m.image), encMil - m.largeurImage / 2, encT + 48, m.largeurImage);
+  if (m.mention) p.centre(encMil, encT + encH - 6, 16, "F2", m.mention);
 
   p.centre(A4.l / 2, 186, 14, "F2", `Composition des équipes : ${CLUB.nom}`);
 
-  const basGrille = grillePDF(p, equipes, 0, personneDe, 200);
+  const basGrille = grillePDF(p, equipes, 0, personneDe, 200, m);
 
   /* Pied de page 1 */
-  const titre = `SECTION FOOTBALL des ${cat}`;
-  const hTitre = basGrille + 32;
-  p.centre(A4.l / 2, hTitre, 12, "F2", titre);
-  const lt = largeurTexte(titre, 12, "F2");
-  p.trait(A4.l / 2 - lt / 2, A4.l / 2 + lt / 2, hTitre + 3, 0.8);
+  let h = basGrille + 30;
+  if (m.section) {
+    const titre = `SECTION FOOTBALL des ${intitule(plateau.type)}`;
+    const hTitre = basGrille + 32;
+    p.centre(A4.l / 2, hTitre, 12, "F2", titre);
+    const lt = largeurTexte(titre, 12, "F2");
+    p.trait(A4.l / 2 - lt / 2, A4.l / 2 + lt / 2, hTitre + 3, 0.8);
+    h = hTitre + 34;
+  }
 
   const champ = (x, haut, label, valeur, xFin) => {
     p.texte(x, haut, 11, "F2", label);
@@ -1147,23 +1203,26 @@ function pagePremiere(plateau, equipes, personneDe) {
     p.trait(xv - 4, xFin, haut + 3, 0.6);
   };
   const milieu = xG + LARGEUR_BLOC;
-  let h = hTitre + 34;
   champ(xG, h, "SECTEUR DE :", plateau.secteur, milieu - 12);
   champ(milieu + 10, h, "GROUPE :", plateau.groupe, xD);
   h += 26;
   champ(xG, h, "PLATEAU à :", plateau.lieu, milieu - 12);
   champ(milieu + 10, h, "DATE :", dateFrancaise(plateau.date), xD);
-  h += 26;
-  champ(xG, h, "RESPONSABLE Du PLATEAU :", plateau.responsable, xD);
-
-  p.droite(xD, A4.h - 46, 10, "F2", "T.S.V.P.");
+  if (m.responsable) {
+    h += 26;
+    champ(xG, h, "RESPONSABLE Du PLATEAU :", plateau.responsable, xD);
+    p.droite(xD, A4.h - 46, 10, "F2", "T.S.V.P.");
+  }
   return p.ops.join("\n");
 }
 
 function pageSeconde(plateau, equipes, personneDe) {
   const p = crayon();
+  const m = modeleFeuille(plateau);
   let h = 40;
-  if (equipes.length > BLOCS_PAR_PAGE) h = grillePDF(p, equipes, 1, personneDe, h) + 30;
+  if (m.secondePageToujours || equipes.length > blocsParPage(m)) {
+    h = grillePDF(p, equipes, 1, personneDe, h, m) + 30;
+  }
 
   const traits = (n, depart, pas = 22) => {
     for (let i = 0; i < n; i++) p.trait(xG, xD, depart + i * pas, 0.5);
@@ -1174,7 +1233,7 @@ function pageSeconde(plateau, equipes, personneDe) {
   h = traits(2, h + 20) + 34;
   p.texte(xG, h, 10.5, "F2", "JOUEURS BLESSES (Nom, Prénom, Club, N° licence et Nature de la blessure) :");
   h = traits(3, h + 20) + 44;
-  p.texte(xG, h, 10.5, "F2", "Signature du Responsable de plateau :");
+  p.texte(xG, h, 10.5, "F2", m.signature);
   return p.ops.join("\n");
 }
 
@@ -1558,7 +1617,9 @@ export default function App() {
     })();
   }, []);
 
+  /* Sans catégorie : retour au choix de l'espace. */
   const choisir = (e) => {
+    if (!e) { setEspace(null); return; }
     try { stockage.ecrire(CLE_ESPACE, e); } catch (err) { /* best effort */ }
     suivi(`espace/${e}`);
     setEspace(e);
@@ -2484,8 +2545,8 @@ function Deverrouillage({ espace = "U9", changerEspace, etat, ouvrir, coller, an
             </button>
           )}
           {changerEspace && (
-            <button onClick={() => changerEspace(espace === "U9" ? "U11" : "U9")} style={{ color: C.terrain }}>
-              Je n'encadre pas les {espace} : passer aux {espace === "U9" ? "U11" : "U9"}
+            <button onClick={() => changerEspace(null)} style={{ color: C.terrain }}>
+              Je n'encadre pas les {espace} : changer de catégorie
             </button>
           )}
         </div>
@@ -3561,7 +3622,7 @@ function FormulairePersonne({ valeur, setValeur, valider, annuler, libelle, erre
 /*  de semaine : une colonne par plateau, une sous-colonne par équipe. */
 /*  Prénoms seulement : ni licence ni date de naissance.               */
 /* ------------------------------------------------------------------ */
-const ABREVIATION_NIVEAU = { "Niveau 2": "N2" };
+const ABREVIATION_NIVEAU = { "Niveau 1": "N1", "Niveau 2": "N2", "Niveau 3": "N3" };
 
 /* « 2026-09-26 » → « 26/09/26 » */
 const dateCourte = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
@@ -4030,9 +4091,10 @@ function VueFeuille({ plateau, equipes, personneDe }) {
       const url = URL.createObjectURL(new Blob([octets], { type: "application/pdf" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = plateau.type === "U11"
-        ? `feuille-${plateau.date || "date"}-u11-${enSlug(plateau.lieu) || "lieu"}.pdf`
-        : `feuille-${plateau.date || "date"}-${enSlug(plateau.niveau) || "plateau"}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
+      /* U9 : le niveau suffit ; U11 : un seul plateau ; ailleurs, la catégorie puis le niveau. */
+      const quoi = plateau.type === "U11" ? "u11"
+        : `${plateau.type === "U9" ? "" : `${plateau.type.toLowerCase()}-`}${enSlug(plateau.niveau) || "plateau"}`;
+      a.download = `feuille-${plateau.date || "date"}-${quoi}-${enSlug(plateau.lieu) || "lieu"}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -4101,11 +4163,20 @@ const IMG_GRANDIR = { l: 340, h: 121, b64: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAkG
 
 const IMG_CRAMPONS = { l: 260, h: 91, b64: "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" };
 
+/* L'enfant au ballon de l'encart « Football à 4 » (feuille U7). */
+const IMG_U7 = { l: 230, h: 262, b64: "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" };
+
 const IMAGES = [
   { nom: "Im1", ...IMG_DISTRICT },
   { nom: "Im2", ...IMG_GRANDIR },
   { nom: "Im3", ...IMG_CRAMPONS },
+  { nom: "Im4", ...IMG_U7 },
 ];
+
+/* L'image de l'encart d'une feuille à blocs, par son nom dans le PDF. */
+function imageFeuille(nom) {
+  return IMAGES.find((im) => im.nom === nom);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Montage autonome (site statique). Sans élément #racine — dans      */
