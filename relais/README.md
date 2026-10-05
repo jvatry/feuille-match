@@ -68,19 +68,6 @@ npx wrangler secret put EMPREINTE_JETON_U11
 
 Dans `feuille-de-match.jsx`, `URL_RELAIS` contient l'adresse du Worker.
 
-## Passage à un effectif par catégorie
-
-Avant les espaces U9 / U11, il n'y avait qu'un fichier, `effectif.enc.json`
-(U8/U9), et un secret `EMPREINTE_JETON`.
-
-- Le relais accepte encore `EMPREINTE_JETON` pour U9 tant que
-  `EMPREINTE_JETON_U9` n'est pas défini : on peut le renommer à son rythme.
-- L'espace U9 lit `effectif-u9.enc.json`, et à défaut `effectif.enc.json` :
-  la première publication U9 crée le nouveau fichier. L'ancien pourra être
-  supprimé quand tous les téléphones auront été mis à jour.
-- **Déployer le nouveau relais avant de mettre l'application en ligne** :
-  l'ancien relais écrirait toutes les publications dans `effectif.enc.json`.
-
 ## Changement de code
 
 Si le code d'une catégorie change : régénérer son fichier avec
