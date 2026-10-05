@@ -10,6 +10,7 @@ ORIGINES = "https://jvatry.github.io"
 
 # Secrets, jamais dans ce fichier :
 #   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put EMPREINTE_JETON_U7
 #   npx wrangler secret put EMPREINTE_JETON_U9
 #   npx wrangler secret put EMPREINTE_JETON_U11
-# Le relais écrit effectif-u9.enc.json ou effectif-u11.enc.json, rien d'autre.
+# Le relais écrit effectif-u7.enc.json, effectif-u9.enc.json ou effectif-u11.enc.json, rien d'autre.

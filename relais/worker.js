@@ -4,15 +4,15 @@
  * L'application envoie { paquet, jeton, categorie } :
  *   - paquet    : l'effectif de la catégorie, déjà chiffré sur le téléphone ;
  *   - jeton     : preuve dérivée du code de la catégorie (PBKDF2), jamais le code ;
- *   - categorie : « u9 » ou « u11 ».
+ *   - categorie : « u7 », « u9 » ou « u11 ».
  * Le relais vérifie le jeton contre l'empreinte du code de cette catégorie,
  * contrôle la forme du paquet et le commite dans effectif-<categorie>.enc.json
  * avec un jeton GitHub qu'il est seul à connaître. Aucun autre fichier ne
  * peut être écrit. Il ne voit jamais l'effectif en clair.
  *
  * Variables (wrangler.toml) : DEPOT, BRANCHE, ORIGINES.
- * Secrets : GITHUB_TOKEN, EMPREINTE_JETON_U9, EMPREINTE_JETON_U11
- *   (node chiffrer-effectif.mjs --jeton --categorie u11).
+ * Secrets : GITHUB_TOKEN et, par catégorie, EMPREINTE_JETON_U7, EMPREINTE_JETON_U9,
+ *   EMPREINTE_JETON_U11 (node chiffrer-effectif.mjs --jeton --categorie u11).
  */
 
 const TAILLE_MAX = 200_000;
@@ -20,10 +20,10 @@ const CLES_PAQUET = ["algo", "donnees", "empreinte", "genere", "iv", "kdf", "v"]
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /* Les seuls fichiers que le relais accepte d'écrire. */
-const FICHIERS = { u9: "effectif-u9.enc.json", u11: "effectif-u11.enc.json" };
+const FICHIERS = { u7: "effectif-u7.enc.json", u9: "effectif-u9.enc.json", u11: "effectif-u11.enc.json" };
 
-const empreinteDe = (categorie, env) =>
-  categorie === "u11" ? env.EMPREINTE_JETON_U11 : env.EMPREINTE_JETON_U9;
+/* Chaque catégorie a son code, donc son secret. */
+const empreinteDe = (categorie, env) => env[`EMPREINTE_JETON_${categorie.toUpperCase()}`];
 
 export default {
   async fetch(requete, env) {
