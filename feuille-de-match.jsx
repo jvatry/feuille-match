@@ -53,9 +53,7 @@ const CLE_PUBLIE = "feuilles:publie";
 const CLE_NOUVEAUTES = "feuilles:nouveautes";
 
 /* Effectif chiffré publié à côté de l'application : un fichier par espace,
-   chacun ouvert par le code de sa catégorie. L'ancien fichier commun (U8/U9)
-   sert de repli à l'espace U9 le temps de la transition. */
-const URL_EFFECTIF = "./effectif.enc.json";
+   chacun ouvert par le code de sa catégorie. */
 const urlEffectif = (espace) => `./effectif-${espace.toLowerCase()}.enc.json`;
 
 /* Relais qui met en ligne l'effectif chiffré (voir relais/README.md). Vide :
@@ -418,7 +416,7 @@ async function envoyerPaquet(paquet, jeton, espace = "U9") {
   if (!reponse.ok) throw new Error("PUBLICATION_ECHEC");
 }
 
-async function telechargerPaquet(url = URL_EFFECTIF) {
+async function telechargerPaquet(url) {
   let reponse;
   try {
     reponse = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" });
@@ -431,16 +429,8 @@ async function telechargerPaquet(url = URL_EFFECTIF) {
   return paquet;
 }
 
-/* L'effectif publié de l'espace ; pour U9, l'ancien fichier commun en repli
-   tant que effectif-u9.enc.json n'est pas en ligne. */
-async function telechargerEffectif(espace) {
-  try {
-    return await telechargerPaquet(urlEffectif(espace));
-  } catch (e) {
-    if (espace !== "U9" || e.message !== "FICHIER_INDISPONIBLE") throw e;
-    return telechargerPaquet(URL_EFFECTIF);
-  }
-}
+/* L'effectif publié de l'espace. */
+const telechargerEffectif = (espace) => telechargerPaquet(urlEffectif(espace));
 
 /* Rend le CSV en clair. AES-GCM refuse de déchiffrer si le code est faux :
    pas de données approximatives, une erreur franche. */
@@ -2822,7 +2812,7 @@ function VueEquipes({
     [effectif]
   );
 
-  /* Une liste par catégorie de joueurs mélangée dans ce type de plateau ; une
+  /* Une liste par catégorie de joueurs de l'espace ; une
      seule catégorie donne une liste sans titre. Toujours triées par nom. */
   const sections = useMemo(() => {
     const q = sansAccent(recherche);

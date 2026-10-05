@@ -4,7 +4,7 @@
  * L'application envoie { paquet, jeton, categorie } :
  *   - paquet    : l'effectif de la catégorie, déjà chiffré sur le téléphone ;
  *   - jeton     : preuve dérivée du code de la catégorie (PBKDF2), jamais le code ;
- *   - categorie : « u9 » ou « u11 » (absente : u9, pour les anciennes versions).
+ *   - categorie : « u9 » ou « u11 ».
  * Le relais vérifie le jeton contre l'empreinte du code de cette catégorie,
  * contrôle la forme du paquet et le commite dans effectif-<categorie>.enc.json
  * avec un jeton GitHub qu'il est seul à connaître. Aucun autre fichier ne
@@ -12,8 +12,7 @@
  *
  * Variables (wrangler.toml) : DEPOT, BRANCHE, ORIGINES.
  * Secrets : GITHUB_TOKEN, EMPREINTE_JETON_U9, EMPREINTE_JETON_U11
- *   (node chiffrer-effectif.mjs --jeton --categorie u11). EMPREINTE_JETON,
- *   l'ancien secret unique, sert de repli pour u9 pendant la transition.
+ *   (node chiffrer-effectif.mjs --jeton --categorie u11).
  */
 
 const TAILLE_MAX = 200_000;
@@ -24,7 +23,7 @@ const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const FICHIERS = { u9: "effectif-u9.enc.json", u11: "effectif-u11.enc.json" };
 
 const empreinteDe = (categorie, env) =>
-  categorie === "u11" ? env.EMPREINTE_JETON_U11 : env.EMPREINTE_JETON_U9 || env.EMPREINTE_JETON;
+  categorie === "u11" ? env.EMPREINTE_JETON_U11 : env.EMPREINTE_JETON_U9;
 
 export default {
   async fetch(requete, env) {
@@ -59,7 +58,7 @@ export default {
       return reponse(400, { erreur: "JSON" });
     }
 
-    const categorie = corps?.categorie ?? "u9";
+    const categorie = corps?.categorie;
     if (!Object.hasOwn(FICHIERS, categorie)) return reponse(400, { erreur: "CATEGORIE" });
     if (!(await jetonValide(corps?.jeton, empreinteDe(categorie, env)))) return reponse(403, { erreur: "CODE_REFUSE" });
     if (!paquetValide(corps.paquet)) return reponse(400, { erreur: "PAQUET_INVALIDE" });
