@@ -4,8 +4,8 @@
  *
  *   node chiffrer-effectif.mjs --categorie u11 effectif-u11.csv
  *
- * Un effectif par catégorie (u9 : U8, U9 et leurs adultes ; u11 : U10, U11 et
- * leurs adultes), chacun chiffré avec le code de sa catégorie. Sans
+ * Un effectif par catégorie (u7 : U6, U7 ; u9 : U8, U9 ; u11 : U10, U11 ;
+ * chacun avec ses adultes), chiffré avec le code de sa catégorie. Sans
  * --categorie : u9. Le fichier écrit est effectif-<categorie>.enc.json, sauf
  * si un second nom est donné.
  *
@@ -15,7 +15,7 @@
  * Entrée  : le CSV exporté par l'onglet Effectif de l'application (bouton
  *           Exporter). Le texte est chiffré tel quel : c'est l'application
  *           elle-même qui le relit ensuite, avec son propre lecteur de CSV.
- * Sortie  : effectif-u9.enc.json ou effectif-u11.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
+ * Sortie  : effectif-<categorie>.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
  *           Ce fichier seul est commité. Le CSV en clair ne l'est jamais.
  *
  * L'application publie elle-même l'effectif (bouton « Publier » de l'onglet
@@ -213,9 +213,9 @@ async function lirePhrase() {
   return phrase;
 }
 
-const CATEGORIES = ["u9", "u11"];
+const CATEGORIES = ["u7", "u9", "u11"];
 
-/* --jeton et --categorie <u9|u11>, puis les fichiers. */
+/* --jeton et --categorie <u7|u9|u11>, puis les fichiers. */
 function lireArguments(args) {
   const options = { jeton: false, categorie: "u9", fichiers: [] };
   for (let i = 0; i < args.length; i++) {
@@ -224,7 +224,7 @@ function lireArguments(args) {
     else options.fichiers.push(args[i]);
   }
   if (!CATEGORIES.includes(options.categorie)) {
-    console.error(`Catégorie inconnue : « ${options.categorie} ». Choisir u9 ou u11.`);
+    console.error(`Catégorie inconnue : « ${options.categorie} ». Choisir u7, u9 ou u11.`);
     process.exit(1);
   }
   return options;
@@ -242,7 +242,7 @@ async function principal() {
   const [entree, sortie = `effectif-${categorie}.enc.json`] = fichiers;
 
   if (!entree) {
-    console.error("Usage : node chiffrer-effectif.mjs [--categorie u9|u11] <effectif.csv> [effectif-u9.enc.json]");
+    console.error("Usage : node chiffrer-effectif.mjs [--categorie u7|u9|u11] <effectif.csv> [effectif-u9.enc.json]");
     process.exit(1);
   }
 

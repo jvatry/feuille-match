@@ -1,12 +1,13 @@
 # Relais de publication de l'effectif
 
 Le bouton **Publier** de l'onglet Effectif chiffre l'effectif de l'espace
-(U9 ou U11) sur le téléphone, puis l'envoie à ce relais. Le relais le commite
+(U7, U9 ou U11) sur le téléphone, puis l'envoie à ce relais. Le relais le commite
 sur `main` dans le fichier de la catégorie, et GitHub Pages le met en ligne en
 une à deux minutes :
 
 | Catégorie | Fichier                 | Secret de l'empreinte du code |
 |-----------|-------------------------|-------------------------------|
+| U7        | `effectif-u7.enc.json`  | `EMPREINTE_JETON_U7`          |
 | U9        | `effectif-u9.enc.json`  | `EMPREINTE_JETON_U9`          |
 | U11       | `effectif-u11.enc.json` | `EMPREINTE_JETON_U11`         |
 
@@ -15,7 +16,7 @@ une à deux minutes :
 - Il garde le jeton GitHub : aucun jeton n'est présent dans le navigateur.
 - Il n'accepte que les appels venant de l'application (`ORIGINES`), avec le
   code de la catégorie envoyée, un fichier exactement dans le format attendu,
-  et n'écrit **que** les deux fichiers ci-dessus.
+  et n'écrit **que** les fichiers ci-dessus.
 
 `chiffrer-effectif.mjs` reste la solution de secours.
 
@@ -34,14 +35,15 @@ GitHub → Settings → Developer settings → **Fine-grained tokens** → Gener
 Sur un ordinateur, à la racine du dépôt :
 
 ```
+node chiffrer-effectif.mjs --jeton --categorie u7
 node chiffrer-effectif.mjs --jeton --categorie u9
 node chiffrer-effectif.mjs --jeton --categorie u11
 ```
 
 Saisir le code de la catégorie. La commande affiche
-`EMPREINTE_JETON_U9 = …` (ou `_U11`) : c'est cette valeur que le relais
-garde, pas le code. Les deux codes doivent être **différents** : le coach U11
-ne doit pas pouvoir ouvrir l'effectif U9, et inversement.
+`EMPREINTE_JETON_U9 = …` (ou `_U7`, `_U11`) : c'est cette valeur que le
+relais garde, pas le code. Les codes doivent être **différents** d'une
+catégorie à l'autre : un coach ne doit ouvrir que l'effectif de la sienne.
 
 ### 3. Déploiement sur Cloudflare Workers (gratuit)
 
@@ -52,14 +54,15 @@ Avec le tableau de bord (sans terminal) :
 3. Settings → Variables and Secrets :
    - variables `DEPOT` = `jvatry/feuille-match`, `BRANCHE` = `main`,
      `ORIGINES` = `https://jvatry.github.io` ;
-   - secrets `GITHUB_TOKEN` (étape 1), `EMPREINTE_JETON_U9` et
-     `EMPREINTE_JETON_U11` (étape 2).
+   - secrets `GITHUB_TOKEN` (étape 1), `EMPREINTE_JETON_U7`,
+     `EMPREINTE_JETON_U9` et `EMPREINTE_JETON_U11` (étape 2).
 
 Ou en ligne de commande, depuis ce dossier :
 
 ```
 npx wrangler deploy
 npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put EMPREINTE_JETON_U7
 npx wrangler secret put EMPREINTE_JETON_U9
 npx wrangler secret put EMPREINTE_JETON_U11
 ```
@@ -71,8 +74,8 @@ Dans `feuille-de-match.jsx`, `URL_RELAIS` contient l'adresse du Worker.
 ## Changement de code
 
 Si le code d'une catégorie change : régénérer son fichier avec
-`chiffrer-effectif.mjs --categorie <u9|u11>`, puis remplacer le secret
-`EMPREINTE_JETON_<U9|U11>` par la nouvelle empreinte (`--jeton`). Sinon le
+`chiffrer-effectif.mjs --categorie <u7|u9|u11>`, puis remplacer le secret
+`EMPREINTE_JETON_<U7|U9|U11>` par la nouvelle empreinte (`--jeton`). Sinon le
 relais refuse les publications (« Ce code ne permet pas de publier
 l'effectif »).
 
