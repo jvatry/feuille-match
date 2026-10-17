@@ -3,37 +3,102 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Gestion des plateaux — F.C. Hettange-Grande</title>
-  <meta name="theme-color" content="#1848A8" />
-  <link rel="icon" type="image/png" sizes="192x192" href="./icone-192.png" />
-  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <title>Gestion des plateaux</title>
+  <meta name="description" content="Feuilles de match et convocations des plateaux de football des jeunes, préparées sur le téléphone." />
+  <meta name="theme-color" content="#14213D" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%BD%3C/text%3E%3C/svg%3E" />
 
-  <!-- Tailwind (version CDN : pas de build, suffisant pour cet usage) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Babel transpile le .jsx directement dans le navigateur -->
-  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
-
-  <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.3.1",
-        "react-dom": "https://esm.sh/react-dom@18.3.1",
-        "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1"
-      }
-    }
+  <script>
+    /* Un téléphone qui a déjà ouvert l'application va directement à son club.
+       Sans club retenu, des données d'avant les clubs : c'est l'adresse
+       d'origine, celle du F.C. Hettange-Grande. Après une adresse inconnue
+       (?inconnu), on reste ici et on oublie le club retenu. */
+    (function () {
+      try {
+        var inconnu = /[?&]inconnu\b/.test(location.search);
+        if (inconnu) { localStorage.removeItem("feuilles:club"); return; }
+        var club = localStorage.getItem("feuilles:club");
+        if (!club) {
+          for (var i = 0; i < localStorage.length; i++) {
+            if ((localStorage.key(i) || "").indexOf("feuilles:") === 0) { club = "fchettange"; break; }
+          }
+        }
+        if (club && /^[a-z][a-z0-9]{1,29}$/.test(club)) location.replace("./" + club + "/");
+      } catch (e) { /* stockage indisponible : la page de présentation */ }
+    })();
   </script>
 
   <style>
-    body { margin: 0; background: #F4F6FA; }
-    #chargement { padding: 2rem; font: 15px system-ui, sans-serif; color: #14213Db3; }
+    :root {
+      --encre: #14213D;
+      --encre70: #14213Db3;
+      --fond: #F4F6FA;
+      --carte: #FFFFFF;
+      --ligne: #D5DCE8;
+      --accent: #14213D;
+      --alerte: #A8321C;
+      --alerteSoft: #F6E2DD;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--fond); color: var(--encre);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 34rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
+    .marque { font-size: 2.5rem; line-height: 1; margin-bottom: 1rem; }
+    h1 { font-size: 1.6rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.01em; }
+    .chapo { color: var(--encre70); margin: 0 0 2rem; }
+    .avis {
+      border: 1px solid var(--alerte); background: var(--alerteSoft);
+      border-radius: .5rem; padding: .75rem 1rem; margin: 0 0 1.5rem; font-size: .95rem;
+    }
+    ul { list-style: none; padding: 0; margin: 0 0 2rem; display: grid; gap: .75rem; }
+    li {
+      background: var(--carte); border: 1px solid var(--ligne); border-radius: .5rem;
+      padding: .85rem 1rem;
+    }
+    li b { display: block; font-size: .95rem; }
+    li span { color: var(--encre70); font-size: .9rem; }
+    button {
+      width: 100%; padding: .9rem 1rem; border: 0; border-radius: .5rem;
+      background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+    }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .note { color: var(--encre70); font-size: .85rem; margin-top: 1rem; }
+    footer { color: var(--encre70); font-size: .8rem; margin-top: 3rem; }
   </style>
 </head>
 <body>
-  <div id="racine"><div id="chargement">Ouverture…</div></div>
+  <main>
+    <div class="marque" aria-hidden="true">⚽</div>
+    <h1>Gestion des plateaux</h1>
+    <p class="chapo">
+      Les feuilles de match et les convocations des plateaux U7, U9 et U11
+      du District Mosellan, préparées en quelques minutes sur le téléphone.
+    </p>
 
-  <script type="text/babel" data-type="module" data-presets="react" src="./feuille-de-match.jsx"></script>
+    <p class="avis" id="inconnu" hidden>
+      Cette adresse ne correspond à aucun club. Vérifiez le lien reçu, ou
+      demandez l'adresse de votre club.
+    </p>
+
+    <ul>
+      <li><b>Le plateau</b><span>Date, lieu, heure du rendez-vous, secteur et groupe.</span></li>
+      <li><b>Les équipes</b><span>Les joueurs choisis dans l'effectif du club, un délégué par équipe.</span></li>
+      <li><b>La feuille de match</b><span>Au modèle du District, en PDF, prête à imprimer.</span></li>
+      <li><b>La convocation</b><span>Une image aux couleurs du club, à partager sur WhatsApp.</span></li>
+      <li><b>L'effectif protégé</b><span>Chiffré, ouvert par un code propre à chaque catégorie du club.</span></li>
+    </ul>
+
+    <button type="button">Demandez l'adresse de votre club</button>
+    <p class="note">Chaque club a son adresse, à ses couleurs et avec ses propres données.</p>
+
+    <footer>Application gratuite, sans compte ni publicité.</footer>
+  </main>
+
+  <script>
+    if (/[?&]inconnu\b/.test(location.search)) document.getElementById("inconnu").hidden = false;
+  </script>
   <script data-goatcounter="https://jvatry.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 </body>
 </html>

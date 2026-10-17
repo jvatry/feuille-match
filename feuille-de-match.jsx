@@ -8,13 +8,14 @@ import {
 /* ------------------------------------------------------------------ */
 /*  Tokens                                                             */
 /* ------------------------------------------------------------------ */
-/* Charte du F.C. Hettange-Grande : bleu et blanc. `terrain` porte le bleu
-   du club (actions, sélections, titres) ; l'orange et le rouge restent
-   réservés aux alertes, pour ne pas les confondre avec une action. */
+/* `terrain` porte la couleur principale du club (actions, sélections,
+   titres) ; `terrainSoft`, `craie` et `ligne` en sont tirées au démarrage
+   (appliquerClub). L'orange et le rouge restent réservés aux alertes, pour ne
+   pas les confondre avec une action, et sont communs à tous les clubs. */
 const C = {
   ink: "#14213D",
   ink70: "#14213Db3",
-  terrain: "#1848A8",       // bleu du club, relevé sur le logo
+  terrain: "#1848A8",
   terrainSoft: "#E6EDF8",
   craie: "#F4F6FA",
   ligne: "#D5DCE8",
@@ -25,9 +26,110 @@ const C = {
   papier: "#FFFFFF",
 };
 
-const LOGO = "./logo-fchg.png";
+/* Le club de l'adresse : chaque club a son dossier (…/feuille-match/fchettange/),
+   avec sa fiche club.json, son logo et ses effectifs chiffrés. La fiche est
+   lue au démarrage, avant le premier rendu (chargerClub) ; ces valeurs ne
+   servent qu'en attendant. */
+const CLUB = {
+  id: "",
+  nom: "",
+  numero: "",
+  equipes: "",           // nom des équipes, sans numéro (« F.C. HETTANGE-GRANDE »)
+  logo: "./logo.png",
+  secteur: "",
+  groupe: "",
+  tenue: "",
+};
+const CLE_CLUB = "feuilles:club";   // le dernier club ouvert, pour la page d'accueil
+const ID_CLUB = /^[a-z][a-z0-9]{1,29}$/;
+/* Le club d'avant les clubs : il relit les données enregistrées sans club. */
+const CLUB_HISTORIQUE = "fchettange";
 
-const CLUB = { nom: "F.C. Hettange-Grande", numero: "527314" };
+/* Couleurs tirées de la couleur du club. */
+const COULEUR = /^#[0-9a-fA-F]{6}$/;
+const rvb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const hexa = (c) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
+const melange = (hex, vers, part) => {
+  const b = rvb(vers);
+  return hexa(rvb(hex).map((v, i) => v + (b[i] - v) * part));
+};
+const luminance = (hex) => {
+  const [r, g, b] = rvb(hex).map((v) => {
+    const x = v / 255;
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contraste = (a, b) => {
+  const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m);
+  return (x + 0.05) / (y + 0.05);
+};
+/* La couleur, foncée juste assez pour qu'un texte blanc se lise dessus et
+   qu'elle se lise en texte sur fond blanc (contraste 4,5). */
+function lisible(hex) {
+  let c = hex.toUpperCase();
+  for (let i = 0; i < 30 && contraste(c, "#FFFFFF") < 4.5; i++) c = melange(c, "#000000", 0.08);
+  return c;
+}
+
+/* Applique la fiche d'un club : nom, couleurs, catégories, valeurs par défaut. */
+function appliquerClub(id, fiche) {
+  if (!fiche || typeof fiche !== "object" || typeof fiche.nom !== "string" || !fiche.nom.trim()
+    || !COULEUR.test(fiche.couleur || "")) {
+    throw new Error("CLUB_INCONNU");
+  }
+  /* Textes et boutons : la couleur foncée au besoin ; fonds et bordures :
+     des teintes claires de la couleur d'origine. */
+  const terrain = lisible(fiche.couleur);
+  const teinte = (part) => melange(fiche.couleur, "#FFFFFF", part);
+  Object.assign(C, {
+    terrain,
+    terrainSoft: teinte(0.89),
+    craie: teinte(0.95),
+    ligne: teinte(0.82),
+  });
+  /* Cases de la convocation : éclaircie de moitié, plus si le texte noir ne
+     s'y lit pas assez. */
+  let cases = 0.5;
+  while (cases < 0.9 && contraste(teinte(cases), "#111111") < 7) cases += 0.05;
+  Object.assign(COULEURS_CONVOCATION, {
+    club: terrain,
+    bleu: teinte(cases),
+    secondaire: COULEUR.test(fiche.couleurSecondaire || "") ? lisible(fiche.couleurSecondaire) : terrain,
+  });
+  const categories = Array.isArray(fiche.categories) ? fiche.categories : [];
+  const espaces = ESPACES.filter((e) => categories.includes(e));
+  if (espaces.length) ESPACES.splice(0, ESPACES.length, ...espaces);
+  const texte = (v) => (typeof v === "string" ? v.trim() : "");
+  Object.assign(CLUB, {
+    id,
+    nom: fiche.nom.trim(),
+    numero: texte(fiche.numero),
+    equipes: (texte(fiche.equipes) || fiche.nom.trim()).toUpperCase(),
+    secteur: texte(fiche.secteur),
+    groupe: texte(fiche.groupe),
+    tenue: texte(fiche.tenue),
+  });
+}
+
+/* Le club est le dossier de l'adresse. Un club inconnu renvoie à la page
+   d'accueil ; sans réseau, le club n'est pas oublié. */
+async function chargerClub() {
+  const dossier = location.pathname.replace(/\/index\.html$/, "").replace(/\/+$/, "").split("/").pop();
+  const id = decodeURIComponent(dossier || "").toLowerCase();
+  if (!ID_CLUB.test(id)) throw new Error("CLUB_INCONNU");
+  let reponse;
+  try {
+    reponse = await fetch("./club.json", { cache: "no-cache" });
+  } catch (e) {
+    throw new Error("RESEAU");
+  }
+  if (!reponse.ok) throw new Error(reponse.status === 404 ? "CLUB_INCONNU" : "RESEAU");
+  appliquerClub(id, await reponse.json().catch(() => null));
+  document.title = `Gestion des plateaux — ${CLUB.nom}`;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", C.terrain);
+  try { window.localStorage.setItem(CLE_CLUB, id); } catch (e) { /* best effort */ }
+}
 
 const MIN_JOUEURS = 5;   // 4 joueurs de champ + 1 gardien
 const MAX_JOUEURS = 8;   // + 3 remplaçants
@@ -38,7 +140,8 @@ const DELEGUE = "Délégué";
 const CATEGORIES = ["U6", "U7", "U8", "U9", "U10", "U11"];
 
 /* L'application du club est divisée en espaces, un par catégorie : chaque
-   coach travaille dans le sien (plateaux, équipes, effectif, documents). */
+   coach travaille dans le sien (plateaux, équipes, effectif, documents).
+   Réduits au démarrage aux catégories du club (appliquerClub). */
 const ESPACES = ["U7", "U9", "U11"];
 const CLE_ESPACE = "feuilles:espace";
 
@@ -52,8 +155,8 @@ const CLE_REMPLACEE = "feuilles:empreinte-remplacee";
 const CLE_PUBLIE = "feuilles:publie";
 const CLE_NOUVEAUTES = "feuilles:nouveautes";
 
-/* Effectif chiffré publié à côté de l'application : un fichier par espace,
-   chacun ouvert par le code de sa catégorie. */
+/* Effectif chiffré publié dans le dossier du club (celui de la page) : un
+   fichier par espace, chacun ouvert par le code de sa catégorie du club. */
 const urlEffectif = (espace) => `./effectif-${espace.toLowerCase()}.enc.json`;
 
 /* Relais qui met en ligne l'effectif chiffré (voir relais/README.md). Vide :
@@ -144,12 +247,9 @@ const reglesDe = (plateau) => TYPES_PLATEAU[plateau.type] || TYPES_PLATEAU.U9;
 /* Les rôles d'une équipe qui désignent une personne de l'effectif. */
 const ROLES = ["delegueId", "capitaineId", "dirigeantId", "educateurId"];
 
-/* Tenue rappelée sur la convocation, modifiable au crayon. */
-const TENUE_DEFAUT = "maillot rayé / short bleu-blanc / chaussettes bleues, protège-tibias";
-
-/* Secteur et groupe du club : pré-remplis, modifiables sur l'onglet Plateau. */
-const SECTEUR_DEFAUT = "Sidérurgie";
-const GROUPE_DEFAUT = "EST";
+/* La tenue rappelée sur la convocation, le secteur et le groupe sont ceux du
+   club (CLUB.tenue, CLUB.secteur, CLUB.groupe) : pré-remplis, modifiables au
+   crayon. */
 
 /* Le même samedi, un espace peut avoir un plateau par niveau : une feuille
    chacun. Le niveau sert à les distinguer, il n'est pas imprimé. */
@@ -159,7 +259,10 @@ const NIVEAUX = TYPES_PLATEAU.U9.niveaux;
 const niveauxLibres = (feuilles, espace) =>
   TYPES_PLATEAU[espace].niveaux.filter((n) => !feuilles.some((f) => f.plateau.niveau === n));
 
-const plateauVide = (espace) => ({ ...PLATEAU_VIDE, type: espace, niveau: TYPES_PLATEAU[espace].niveaux[0] });
+const plateauVide = (espace) => ({
+  ...PLATEAU_VIDE, type: espace, niveau: TYPES_PLATEAU[espace].niveaux[0],
+  secteur: CLUB.secteur, groupe: CLUB.groupe,
+});
 
 const PLATEAU_VIDE = {
   type: "U9",
@@ -168,8 +271,8 @@ const PLATEAU_VIDE = {
   lieu: "",
   adresse: "",
   heureRdv: "",
-  secteur: SECTEUR_DEFAUT,
-  groupe: GROUPE_DEFAUT,
+  secteur: "",
+  groupe: "",
   defautsClub: true,   // marque les plateaux qui ont déjà reçu ces valeurs
   responsable: "",
 };
@@ -177,7 +280,7 @@ const PLATEAU_VIDE = {
 /* Sans numéro : la seule équipe d'un plateau U11. */
 const equipeVide = (n) => ({
   id: `e${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-  nom: n ? `${CLUB.nom.toUpperCase()} ${n}` : CLUB.nom.toUpperCase(),
+  nom: n ? `${CLUB.equipes} ${n}` : CLUB.equipes,
   joueurs: [],
   delegueId: null,
   capitaineId: null,
@@ -215,8 +318,8 @@ function reprendrePlateau(p, espace = "U9") {
     ...p,
     type,
     niveau: TYPES_PLATEAU[type].niveaux.includes(p.niveau) ? p.niveau : TYPES_PLATEAU[type].niveaux[0],
-    secteur: (!ancien && p.secteur) || SECTEUR_DEFAUT,
-    groupe: (!ancien && p.groupe) || GROUPE_DEFAUT,
+    secteur: (!ancien && p.secteur) || CLUB.secteur,
+    groupe: (!ancien && p.groupe) || CLUB.groupe,
     defautsClub: true,
   };
 }
@@ -448,7 +551,7 @@ async function envoyerPaquet(paquet, jeton, espace = "U9") {
     reponse = await fetch(URL_RELAIS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paquet, jeton, categorie: espace.toLowerCase() }),
+      body: JSON.stringify({ paquet, jeton, club: CLUB.id, categorie: espace.toLowerCase() }),
     });
   } catch (e) {
     throw new Error("RESEAU");
@@ -1560,17 +1663,32 @@ const stockage = {
   },
 };
 
-/* Le stockage d'un espace : « feuilles:effectif » devient
-   « feuilles:u11:effectif ». L'espace U9 relit les clés d'avant les espaces
-   tant qu'il n'a rien écrit à la place : rien n'est perdu sur les
-   téléphones qui servaient déjà. */
+/* Une clé du club : « feuilles:espace » devient « feuilles:fchettange:espace ». */
+const cleDuClub = (cle) => cle.replace(/^feuilles:/, `feuilles:${CLUB.id}:`);
+
+/* La première valeur enregistrée parmi ces clés. */
+async function lirePremiere(cles) {
+  for (const cle of cles) {
+    const v = await stockage.lire(cle);
+    if (v !== null && v !== undefined) return v;
+  }
+  return null;
+}
+
+/* Le stockage d'un espace du club : « feuilles:effectif » devient
+   « feuilles:fchettange:u11:effectif ». Le club historique relit les clés
+   d'avant les clubs (« feuilles:u11:effectif »), et son espace U9 celles
+   d'avant les espaces, tant qu'il n'a rien écrit à la place : rien n'est
+   perdu sur les téléphones qui servaient déjà. */
 function stockageEspace(espace) {
-  const nom = (cle) => `feuilles:${espace.toLowerCase()}:${cle.replace(/^feuilles:/, "")}`;
+  const e = espace.toLowerCase();
+  const court = (cle) => cle.replace(/^feuilles:/, "");
+  const nom = (cle) => `feuilles:${CLUB.id}:${e}:${court(cle)}`;
+  const anciennes = (cle) => (CLUB.id !== CLUB_HISTORIQUE ? []
+    : [`feuilles:${e}:${court(cle)}`, ...(espace === "U9" ? [cle] : [])]);
   return {
-    async lire(cle) {
-      const v = await stockage.lire(nom(cle));
-      if (v !== null && v !== undefined) return v;
-      return espace === "U9" ? stockage.lire(cle) : null;
+    lire(cle) {
+      return lirePremiere([nom(cle), ...anciennes(cle)]);
     },
     ecrire(cle, valeur) {
       return stockage.ecrire(nom(cle), valeur);
@@ -1587,7 +1705,8 @@ const SUIVI = typeof location !== "undefined" && location.protocol === "https:";
 function suivi(evenement) {
   if (!SUIVI) return;
   try {
-    window.goatcounter?.count({ path: evenement, title: evenement, event: true });
+    const chemin = CLUB.id ? `${CLUB.id}/${evenement}` : evenement;
+    window.goatcounter?.count({ path: chemin, title: chemin, event: true });
   } catch (e) { /* bloqueur, hors ligne : sans importance */ }
 }
 
@@ -1601,17 +1720,22 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
+      const historique = CLUB.id === CLUB_HISTORIQUE;
       let e = null;
-      try { e = await stockage.lire(CLE_ESPACE); } catch (err) { /* stockage indisponible */ }
+      try {
+        e = await lirePremiere([cleDuClub(CLE_ESPACE), ...(historique ? [CLE_ESPACE] : [])]);
+      } catch (err) { /* stockage indisponible */ }
       if (!ESPACES.includes(e)) {
-        /* Un téléphone qui servait avant les espaces : c'était l'U9. */
+        /* Un club d'une seule catégorie n'a rien à choisir ; un téléphone
+           qui servait avant les espaces : c'était l'U9. */
         let deja = null;
-        try {
-          deja = (await stockage.lire("feuilles:effectif")) || (await stockage.lire("feuilles:plateaux"))
-            || (await stockage.lire("feuilles:plateau")) || (await stockage.lire("feuilles:code"));
-        } catch (err) { /* rien */ }
-        e = deja ? "U9" : null;
-        if (e) try { stockage.ecrire(CLE_ESPACE, e); } catch (err) { /* best effort */ }
+        if (historique) {
+          try {
+            deja = await lirePremiere(["feuilles:effectif", "feuilles:plateaux", "feuilles:plateau", "feuilles:code"]);
+          } catch (err) { /* rien */ }
+        }
+        e = ESPACES.length === 1 ? ESPACES[0] : deja && ESPACES.includes("U9") ? "U9" : null;
+        if (e) try { stockage.ecrire(cleDuClub(CLE_ESPACE), e); } catch (err) { /* best effort */ }
       }
       setEspace(e);
     })();
@@ -1620,7 +1744,7 @@ export default function App() {
   /* Sans catégorie : retour au choix de l'espace. */
   const choisir = (e) => {
     if (!e) { setEspace(null); return; }
-    try { stockage.ecrire(CLE_ESPACE, e); } catch (err) { /* best effort */ }
+    try { stockage.ecrire(cleDuClub(CLE_ESPACE), e); } catch (err) { /* best effort */ }
     suivi(`espace/${e}`);
     setEspace(e);
   };
@@ -1643,7 +1767,7 @@ function ChoixEspace({ choisir }) {
     <div className="min-h-screen" style={{ background: C.craie, color: C.ink }}>
       <div className="max-w-md mx-auto px-5 py-12">
         <div className="flex items-center gap-3 mb-10">
-          <img src={LOGO} alt="" className="h-14 w-auto" />
+          <img src={CLUB.logo} alt="" className="h-14 w-auto" />
           <div>
             <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>Gestion des plateaux</h1>
             <p className="text-xs" style={{ color: C.ink70 }}>{CLUB.nom} · {CLUB.numero}</p>
@@ -1671,6 +1795,14 @@ function ChoixEspace({ choisir }) {
 /* Dans l'en-tête : la catégorie de l'espace, et de quoi en changer. */
 function SelecteurEspace({ espace, changer }) {
   const [ouvert, setOuvert] = useState(false);
+  if (ESPACES.length === 1) {
+    return (
+      <span className="ml-2 px-2 py-0.5 rounded-md border text-base font-semibold inline-block align-middle"
+        style={{ borderColor: C.terrain, color: C.terrain, background: C.terrainSoft }}>
+        {espace}
+      </span>
+    );
+  }
   return (
     <span className="relative inline-block">
       <button onClick={() => setOuvert((v) => !v)} aria-expanded={ouvert}
@@ -1709,7 +1841,7 @@ function EspaceCategorie({ espace, changerEspace }) {
   const [active, setActive] = useState(null);
   const [equipeActive, setEquipeActive] = useState(null);
   const [viderDemande, setViderDemande] = useState(false);
-  const [tenue, setTenue] = useState(TENUE_DEFAUT);
+  const [tenue, setTenue] = useState(CLUB.tenue);
   /* Onglet Feuille : la convocation (en semaine), ou la feuille de match du plateau. */
   const [document_, setDocument] = useState("convocation");
 
@@ -1872,7 +2004,7 @@ function EspaceCategorie({ espace, changerEspace }) {
             equipes: (f.equipes?.length ? f.equipes : [equipeVide(regles.maxEquipes === 1 ? 0 : 1)])
               .slice(0, regles.maxEquipes).map((e) => ({
               ...e,
-              nom: e.nom.replace(/^F\.C\. HETTANGE GRANDE\b/, CLUB.nom.toUpperCase()),
+              nom: e.nom.replace(/^F\.C\. HETTANGE GRANDE\b/, CLUB.equipes),
             })),
           }));
           const choisie = lues.find((f) => f.id === d.active) || lues[0];
@@ -2174,7 +2306,7 @@ function EspaceCategorie({ espace, changerEspace }) {
       <header className="px-4 py-4 border-b" style={{ borderColor: C.ligne, background: C.papier }}>
         <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <img src={LOGO} alt="" className="h-11 w-auto shrink-0" />
+            <img src={CLUB.logo} alt="" className="h-11 w-auto shrink-0" />
             <div className="min-w-0">
               <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>
                 Gestion des plateaux
@@ -2463,7 +2595,7 @@ function Deverrouillage({ espace = "U9", changerEspace, etat, ouvrir, coller, an
   return (
     <div className="min-h-screen" style={{ background: C.craie, color: C.ink }}>
       <div className="max-w-md mx-auto px-5 py-12">
-        <img src={LOGO} alt={`Logo du ${CLUB.nom}`} className="h-24 w-auto mb-4" />
+        <img src={CLUB.logo} alt={`Logo du ${CLUB.nom}`} className="h-24 w-auto mb-4" />
         <h1 className="text-lg font-semibold tracking-tight" style={{ color: C.terrain }}>
           Gestion des plateaux
         </h1>
@@ -2544,7 +2676,7 @@ function Deverrouillage({ espace = "U9", changerEspace, etat, ouvrir, coller, an
               Revenir à l'application
             </button>
           )}
-          {changerEspace && (
+          {changerEspace && ESPACES.length > 1 && (
             <button onClick={() => changerEspace(null)} style={{ color: C.terrain }}>
               Je n'encadre pas les {espace} : changer de catégorie
             </button>
@@ -2776,10 +2908,10 @@ function VuePlateau({ plateau, setPlateau, effectif, allerEffectif, supprimer, n
           changer={(heureRdv) => setPlateau({ ...plateau, heureRdv })} />
       </Champ>
 
-      <ChampModifiable label="Secteur" valeur={plateau.secteur} defaut={SECTEUR_DEFAUT}
+      <ChampModifiable label="Secteur" valeur={plateau.secteur} defaut={CLUB.secteur}
         changer={(secteur) => setPlateau({ ...plateau, secteur })} />
 
-      <ChampModifiable label="Groupe" valeur={plateau.groupe} defaut={GROUPE_DEFAUT}
+      <ChampModifiable label="Groupe" valeur={plateau.groupe} defaut={CLUB.groupe}
         changer={(groupe) => setPlateau({ ...plateau, groupe })} />
 
       <Champ label="Responsable du plateau" aide="Laissez vide pour le remplir à la main sur place.">
@@ -3767,8 +3899,9 @@ function modeleConvocation(feuilles, personneDe, tenue, effectif = []) {
 
 const COULEURS_CONVOCATION = {
   fond: "#111111",
-  bleu: "#8BA3D3",          // bleu du club éclairci de moitié : texte noir lisible
+  bleu: "#8BA3D3",          // couleur du club éclaircie de moitié (appliquerClub)
   club: "#1848A8",
+  secondaire: "#1848A8",    // « CONVOCATION » : seconde couleur du club, sinon la principale
   blanc: "#FFFFFF",
   encre: "#111111",
   rouge: "#FF2A1A",
@@ -3912,7 +4045,8 @@ function dessinerConvocation(toile, m, logo = null) {
     const { h } = r;
     switch (r.cle) {
       case "entete": {
-        /* Bandeau du club : le logo, le nom du club en bleu. */
+        /* Bandeau du club : le logo, le nom du club à sa couleur, réduit
+           s'il est trop long pour la largeur. */
         caseTexte(0, y, L_LIBELLE + toute, h, K.blanc, "");
         let xTexte = JOINT + 24;
         if (logo) {
@@ -3922,9 +4056,14 @@ function dessinerConvocation(toile, m, logo = null) {
           xTexte += ll + 24;
         }
         const milieu = xTexte + (L_LIBELLE + toute - xTexte) / 2;
+        const nomClub = CLUB.nom.toUpperCase();
+        const place = L_LIBELLE + toute - xTexte - 24;
+        let taille = 44;
+        ctx.font = police(taille);
+        while (taille > 20 && ctx.measureText(nomClub).width > place) ctx.font = police(--taille);
         ctx.fillStyle = K.club;
-        ctx.font = police(44);
-        ctx.fillText(CLUB.nom.toUpperCase(), milieu, y + JOINT + (h - JOINT) * 0.38);
+        ctx.fillText(nomClub, milieu, y + JOINT + (h - JOINT) * 0.38);
+        ctx.fillStyle = K.secondaire;
         ctx.font = police(30);
         ctx.fillText("CONVOCATION", milieu, y + JOINT + (h - JOINT) * 0.74);
         break;
@@ -3986,7 +4125,7 @@ function VueConvocation({ feuilles, personneDe, effectif, tenue, setTenue }) {
   useEffect(() => {
     const img = new Image();
     img.onload = () => setLogo(img);
-    img.src = LOGO;
+    img.src = CLUB.logo;
   }, []);
 
   const modele = useMemo(
@@ -4074,7 +4213,7 @@ function VueConvocation({ feuilles, personneDe, effectif, tenue, setTenue }) {
         </button>
       </div>
 
-      <ChampModifiable label="Tenue" valeur={tenue} defaut={TENUE_DEFAUT} changer={setTenue} />
+      <ChampModifiable label="Tenue" valeur={tenue} defaut={CLUB.tenue} changer={setTenue} />
 
       {message && (
         <p className="rounded-lg border p-3 mb-4 text-sm"
@@ -4256,11 +4395,20 @@ function imageFeuille(nom) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Montage autonome (site statique). Sans élément #racine — dans      */
-/*  l'artifact par exemple — ce bloc ne fait rien.                     */
+/*  Montage autonome (site statique), une fois le club lu. Sans        */
+/*  élément #racine — dans l'artifact par exemple — rien ne se passe.  */
 /* ------------------------------------------------------------------ */
 if (typeof document !== "undefined" && document.getElementById("racine")) {
-  import("react-dom/client").then(({ createRoot }) => {
-    createRoot(document.getElementById("racine")).render(<App />);
-  });
+  const racine = document.getElementById("racine");
+  chargerClub().then(
+    () => import("react-dom/client").then(({ createRoot }) => createRoot(racine).render(<App />)),
+    (e) => {
+      if (e.message === "CLUB_INCONNU") {
+        location.replace("../?inconnu");
+        return;
+      }
+      racine.textContent = "Pas de réseau : l'application n'a pas pu s'ouvrir. Réessayez quand le réseau revient.";
+      racine.style.cssText = "padding:2rem;font:15px system-ui,sans-serif;color:#14213D";
+    }
+  );
 }
