@@ -2847,21 +2847,67 @@ function SelecteurPlateaux({ feuilles, active, choisir, ajouter }) {
 /* ------------------------------------------------------------------ */
 /*  Vue Équipes                                                        */
 /* ------------------------------------------------------------------ */
+/* Recherche et bascules de catégorie d'une liste de personnes, communes aux
+   onglets Équipes et Effectif. Chaque onglet a les siennes : elles repartent
+   de zéro quand l'onglet est rouvert. */
+function useFiltre(categories) {
+  const toutes = () => Object.fromEntries(categories.map((c) => [c, true]));
+  const [recherche, setRecherche] = useState("");
+  const [visibles, setVisibles] = useState(toutes);
+  const cle = categories.join("|");
+  useEffect(() => { setVisibles(toutes()); }, [cle]);
+  const basculer = (cat) => setVisibles((v) => ({ ...v, [cat]: !v[cat] }));
+  return { recherche, setRecherche, visibles, basculer, q: sansAccent(recherche) };
+}
+
+/* Une personne correspond à la recherche par son nom, son prénom et, si
+   demandé, son numéro de licence. */
+const correspond = (p, q, avecLicence = false) =>
+  !q || sansAccent(`${p.nom} ${p.prenom}`).includes(q) ||
+  sansAccent(`${p.prenom} ${p.nom}`).includes(q) ||
+  (avecLicence && String(p.licence || "").includes(q.replace(/\s/g, "")));
+
+function FiltreListe({ filtre, categories, libelle = (c) => c, placeholder }) {
+  return (
+    <>
+      {categories.length > 1 && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {categories.map((cat) => {
+            const actif = filtre.visibles[cat];
+            return (
+              <button key={cat} type="button" onClick={() => filtre.basculer(cat)}
+                aria-pressed={actif}
+                className="px-4 py-2 rounded-md border text-sm"
+                style={{
+                  borderColor: actif ? C.terrain : C.ligne,
+                  background: actif ? C.terrainSoft : C.papier,
+                  color: actif ? C.terrain : C.ink70,
+                  fontWeight: actif ? 600 : 400,
+                }}>
+                {libelle(cat)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="relative mb-3">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: C.ink70 }} />
+        <input type="search" value={filtre.recherche} onChange={(e) => filtre.setRecherche(e.target.value)}
+          placeholder={placeholder} aria-label={placeholder}
+          className="w-full border rounded-md pl-9 pr-3 py-2 text-sm" style={styleInput} />
+      </div>
+    </>
+  );
+}
+
 function VueEquipes({
   effectif, plateau, equipes, equipeActive, setEquipeActive, affectation, delegations, feuilleId,
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
 }) {
-  const [recherche, setRecherche] = useState("");
   const regles = reglesDe(plateau);
   const categoriesJoueurs = regles.categoriesJoueurs;
-  const [categoriesVisibles, setCategoriesVisibles] = useState(() =>
-    Object.fromEntries(categoriesJoueurs.map((c) => [c, true]))
-  );
-  useEffect(() => {
-    setCategoriesVisibles(Object.fromEntries(categoriesJoueurs.map((c) => [c, true])));
-  }, [plateau.type]);
-  const toggleCategorie = (cat) =>
-    setCategoriesVisibles((v) => ({ ...v, [cat]: !v[cat] }));
+  const filtre = useFiltre(categoriesJoueurs);
   const active = equipes.find((e) => e.id === equipeActive) || equipes[0];
 
   useEffect(() => {
@@ -2876,22 +2922,19 @@ function VueEquipes({
   /* Une liste par catégorie de joueurs de l'espace ; une
      seule catégorie donne une liste sans titre. Toujours triées par nom. */
   const sections = useMemo(() => {
-    const q = sansAccent(recherche);
-    const filtre = (cat) =>
+    const deLaCategorie = (cat) =>
       effectif
-        .filter((p) => !estDelegue(p) && p.categorie === cat)
-        .filter((p) => !q || sansAccent(`${p.nom} ${p.prenom}`).includes(q))
+        .filter((p) => !estDelegue(p) && p.categorie === cat && correspond(p, filtre.q))
         .sort(parNom);
-    const categories = TYPES_PLATEAU[plateau.type].categoriesJoueurs;
-    if (categories.length === 1) {
-      return [{ titre: null, joueurs: filtre(categories[0]) }];
+    if (categoriesJoueurs.length === 1) {
+      return [{ titre: null, joueurs: deLaCategorie(categoriesJoueurs[0]) }];
     }
-    return categories.map((cat) => ({ titre: cat, joueurs: filtre(cat) }));
-  }, [effectif, plateau.type, recherche]);
+    return categoriesJoueurs.map((cat) => ({ titre: cat, joueurs: deLaCategorie(cat) }));
+  }, [effectif, categoriesJoueurs, filtre.q]);
 
   const sectionsAffichees = useMemo(
-    () => sections.filter((s) => !s.titre || categoriesVisibles[s.titre]),
-    [sections, categoriesVisibles]
+    () => sections.filter((s) => !s.titre || filtre.visibles[s.titre]),
+    [sections, filtre.visibles]
   );
 
   const total = sectionsAffichees.reduce((n, s) => n + s.joueurs.length, 0);
@@ -3026,33 +3069,7 @@ function VueEquipes({
             )}
           </div>
 
-          {categoriesJoueurs.length > 1 && (
-            <div className="flex gap-2 mb-2">
-              {categoriesJoueurs.map((cat) => {
-                const actif = categoriesVisibles[cat];
-                return (
-                  <button key={cat} type="button" onClick={() => toggleCategorie(cat)}
-                    aria-pressed={actif}
-                    className="px-4 py-2 rounded-md border text-sm"
-                    style={{
-                      borderColor: actif ? C.terrain : C.ligne,
-                      background: actif ? C.terrainSoft : C.papier,
-                      color: actif ? C.terrain : C.ink70,
-                      fontWeight: actif ? 600 : 400,
-                    }}>
-                    {cat}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="relative mb-3">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: C.ink70 }} />
-            <input value={recherche} onChange={(e) => setRecherche(e.target.value)}
-              placeholder="Chercher un joueur"
-              className="w-full border rounded-md pl-9 pr-3 py-2 text-sm" style={styleInput} />
-          </div>
+          <FiltreListe filtre={filtre} categories={categoriesJoueurs} placeholder="Chercher un joueur" />
 
           {total === 0 && (
             <p className="text-sm py-6 text-center" style={{ color: C.ink70 }}>
@@ -3266,13 +3283,25 @@ function VueEffectif({
 
   const compte = (c) => effectif.filter((p) => p.categorie === c).length;
 
-  const ordre = Object.fromEntries([...categories, DELEGUE].map((c, i) => [c, i]));
-  const liste = useMemo(
-    () => effectif.slice().sort((a, b) =>
-      (ordre[a.categorie] ?? 99) - (ordre[b.categorie] ?? 99) || parNom(a, b)
-    ),
-    [effectif]
-  );
+  /* Un groupe par catégorie de l'espace, puis les délégués ; une personne
+     d'une autre catégorie (fichier ancien) reste visible dans « Autres ». */
+  const groupes = useMemo(() => [...categories, DELEGUE], [categories]);
+  const filtre = useFiltre(groupes);
+  const sections = useMemo(() => {
+    const autres = effectif.filter((p) => !groupes.includes(p.categorie));
+    return [
+      ...groupes.filter((g) => filtre.visibles[g])
+        .map((g) => ({ titre: g, personnes: effectif.filter((p) => p.categorie === g) })),
+      ...(autres.length ? [{ titre: "Autres", personnes: autres }] : []),
+    ].map((s) => ({ ...s, personnes: s.personnes.filter((p) => correspond(p, filtre.q, true)).sort(parNom) }));
+  }, [effectif, groupes, filtre.visibles, filtre.q]);
+  const affichees = sections.reduce((n, s) => n + s.personnes.length, 0);
+  const libelleGroupe = (g) => (g === DELEGUE ? "Délégués" : g);
+  const compteGroupe = (s) => {
+    const n = s.personnes.length;
+    const mot = s.titre === DELEGUE ? "délégué" : s.titre === "Autres" ? "personne" : "joueur";
+    return `${n} ${mot}${n > 1 ? "s" : ""}`;
+  };
 
   return (
     <section>
@@ -3428,58 +3457,78 @@ function VueEffectif({
         />
       )}
 
-      {liste.length === 0 ? (
+      {effectif.length === 0 ? (
         <div className="text-center py-12 rounded-lg border border-dashed" style={{ borderColor: C.ligne }}>
           <p className="text-sm" style={{ color: C.ink70 }}>
             Aucune ligne pour l'instant.<br />Saisissez le code de l'effectif, ou collez la liste reçue.
           </p>
         </div>
       ) : (
-        <ul className="space-y-1.5">
-          {liste.map((p) => (edition?.id === p.id ? (
-            <li key={p.id}>
-              <FormulairePersonne
-                categories={categories}
-                valeur={edition.valeur}
-                setValeur={(valeur) => setEdition({ ...edition, valeur })}
-                erreur={erreurFiche}
-                libelle="Enregistrer"
-                annuler={() => setEdition(null)}
-                valider={() => {
-                  const fiche = ficheValide(edition.valeur, p.id);
-                  if (!fiche) return;
-                  modifier(p.id, fiche);
-                  setEdition(null);
-                }}
-              />
-            </li>
-          ) : (
-            <li key={p.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border"
-              style={{ background: C.papier, borderColor: C.ligne }}>
-              <button onClick={() => ouvrirFiche(p)} aria-label={`Corriger ${nomCourt(p)}`}
-                className="flex-1 min-w-0 flex items-center gap-3 text-left">
-                <span className="text-xs w-12 shrink-0"
-                  style={{ color: estDelegue(p) ? C.brassard : C.terrain }}>
-                  {estDelegue(p) ? "Dél." : p.categorie}
-                </span>
-                <span className="flex-1 min-w-0">
-                  <span className="block text-sm truncate">
-                    <span className="font-medium">{p.nom}</span> {p.prenom}
-                  </span>
-                  <span className="block text-xs" style={{ color: C.ink70 }}>
-                    {p.licence}{p.naissance ? ` · ${p.naissance}` : ""}
-                    {affectation[p.id] ? ` · ${nomPlace(affectation[p.id], null)}` : ""}
-                  </span>
-                </span>
-                {p.feminine && <BadgeFeminine />}
-                {!p.valide && <BadgeLicence />}
-              </button>
-              <button onClick={() => retirer(p.id)} aria-label="Retirer" style={{ color: C.ink70 }}>
-                <Trash2 size={14} />
-              </button>
-            </li>
-          )))}
-        </ul>
+        <>
+          <FiltreListe filtre={filtre} categories={groupes} libelle={libelleGroupe}
+            placeholder="Chercher dans l'effectif" />
+
+          {affichees === 0 && (
+            <p className="text-sm py-6 text-center" style={{ color: C.ink70 }}>
+              Aucune personne ne correspond.
+            </p>
+          )}
+
+          {sections.filter((s) => s.personnes.length).map((s) => (
+            <div key={s.titre} className="mb-4">
+              <div className="flex items-baseline gap-2 mb-2 pb-1 border-b" style={{ borderColor: C.ligne }}>
+                <span className="text-sm font-semibold"
+                  style={{ color: s.titre === DELEGUE ? C.brassard : C.terrain }}>{libelleGroupe(s.titre)}</span>
+                <span className="text-xs" style={{ color: C.ink70 }}>{compteGroupe(s)}</span>
+              </div>
+              <ul className="space-y-1.5">
+                {s.personnes.map((p) => (edition?.id === p.id ? (
+                  <li key={p.id}>
+                    <FormulairePersonne
+                      categories={categories}
+                      valeur={edition.valeur}
+                      setValeur={(valeur) => setEdition({ ...edition, valeur })}
+                      erreur={erreurFiche}
+                      libelle="Enregistrer"
+                      annuler={() => setEdition(null)}
+                      valider={() => {
+                        const fiche = ficheValide(edition.valeur, p.id);
+                        if (!fiche) return;
+                        modifier(p.id, fiche);
+                        setEdition(null);
+                      }}
+                    />
+                  </li>
+                ) : (
+                  <li key={p.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border"
+                    style={{ background: C.papier, borderColor: C.ligne }}>
+                    <button onClick={() => ouvrirFiche(p)} aria-label={`Corriger ${nomCourt(p)}`}
+                      className="flex-1 min-w-0 flex items-center gap-3 text-left">
+                      <span className="text-xs w-12 shrink-0"
+                        style={{ color: estDelegue(p) ? C.brassard : C.terrain }}>
+                        {estDelegue(p) ? "Dél." : p.categorie}
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm truncate">
+                          <span className="font-medium">{p.nom}</span> {p.prenom}
+                        </span>
+                        <span className="block text-xs" style={{ color: C.ink70 }}>
+                          {p.licence}{p.naissance ? ` · ${p.naissance}` : ""}
+                          {affectation[p.id] ? ` · ${nomPlace(affectation[p.id], null)}` : ""}
+                        </span>
+                      </span>
+                      {p.feminine && <BadgeFeminine />}
+                      {!p.valide && <BadgeLicence />}
+                    </button>
+                    <button onClick={() => retirer(p.id)} aria-label="Retirer" style={{ color: C.ink70 }}>
+                      <Trash2 size={14} />
+                    </button>
+                  </li>
+                )))}
+              </ul>
+            </div>
+          ))}
+        </>
       )}
     </section>
   );
