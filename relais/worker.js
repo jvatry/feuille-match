@@ -1,29 +1,36 @@
 /**
  * Relais de publication de l'effectif — Cloudflare Worker.
  *
- * L'application envoie { paquet, jeton, categorie } :
+ * L'application envoie { paquet, jeton, club, categorie } :
  *   - paquet    : l'effectif de la catégorie, déjà chiffré sur le téléphone ;
  *   - jeton     : preuve dérivée du code de la catégorie (PBKDF2), jamais le code ;
+ *   - club      : le dossier du club (« fchettange ») ;
  *   - categorie : « u7 », « u9 » ou « u11 ».
- * Le relais vérifie le jeton contre l'empreinte du code de cette catégorie,
- * contrôle la forme du paquet et le commite dans effectif-<categorie>.enc.json
- * avec un jeton GitHub qu'il est seul à connaître. Aucun autre fichier ne
- * peut être écrit. Il ne voit jamais l'effectif en clair.
+ * Le relais vérifie le jeton contre l'empreinte du code de ce club et de cette
+ * catégorie, contrôle la forme du paquet et le commite dans
+ * <club>/effectif-<categorie>.enc.json avec un jeton GitHub qu'il est seul à
+ * connaître. Aucun autre fichier ne peut être écrit. Il ne voit jamais
+ * l'effectif en clair.
  *
  * Variables (wrangler.toml) : DEPOT, BRANCHE, ORIGINES.
- * Secrets : GITHUB_TOKEN et, par catégorie, EMPREINTE_JETON_U7, EMPREINTE_JETON_U9,
- *   EMPREINTE_JETON_U11 (node chiffrer-effectif.mjs --jeton --categorie u11).
+ * Secrets : GITHUB_TOKEN et, par club et par catégorie,
+ *   EMPREINTE_JETON_<CLUB>_<CATEGORIE> (EMPREINTE_JETON_FCHETTANGE_U9…), donnés par
+ *   node chiffrer-effectif.mjs --jeton --club fchettange --categorie u9.
+ *   Un club ou une catégorie sans secret ne peut rien publier.
  */
 
 const TAILLE_MAX = 200_000;
 const CLES_PAQUET = ["algo", "donnees", "empreinte", "genere", "iv", "kdf", "v"];
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
-/* Les seuls fichiers que le relais accepte d'écrire. */
-const FICHIERS = { u7: "effectif-u7.enc.json", u9: "effectif-u9.enc.json", u11: "effectif-u11.enc.json" };
+/* Les seuls fichiers que le relais accepte d'écrire : <club>/effectif-<categorie>.enc.json. */
+const CATEGORIES = ["u7", "u9", "u11"];
+const CLUB = /^[a-z][a-z0-9]{1,29}$/;
+const fichierDe = (club, categorie) => `${club}/effectif-${categorie}.enc.json`;
 
-/* Chaque catégorie a son code, donc son secret. */
-const empreinteDe = (categorie, env) => env[`EMPREINTE_JETON_${categorie.toUpperCase()}`];
+/* Chaque catégorie de chaque club a son code, donc son secret. */
+const empreinteDe = (club, categorie, env) =>
+  env[`EMPREINTE_JETON_${club.toUpperCase()}_${categorie.toUpperCase()}`];
 
 export default {
   async fetch(requete, env) {
@@ -58,13 +65,14 @@ export default {
       return reponse(400, { erreur: "JSON" });
     }
 
-    const categorie = corps?.categorie;
-    if (!Object.hasOwn(FICHIERS, categorie)) return reponse(400, { erreur: "CATEGORIE" });
-    if (!(await jetonValide(corps?.jeton, empreinteDe(categorie, env)))) return reponse(403, { erreur: "CODE_REFUSE" });
+    const { club, categorie } = corps || {};
+    if (typeof club !== "string" || !CLUB.test(club)) return reponse(400, { erreur: "CLUB" });
+    if (!CATEGORIES.includes(categorie)) return reponse(400, { erreur: "CATEGORIE" });
+    if (!(await jetonValide(corps.jeton, empreinteDe(club, categorie, env)))) return reponse(403, { erreur: "CODE_REFUSE" });
     if (!paquetValide(corps.paquet)) return reponse(400, { erreur: "PAQUET_INVALIDE" });
 
     try {
-      await commiter(corps.paquet, FICHIERS[categorie], categorie, env);
+      await commiter(corps.paquet, fichierDe(club, categorie), club, categorie, env);
     } catch (e) {
       console.error(e.message);
       return reponse(502, { erreur: "GITHUB" });
@@ -102,7 +110,7 @@ function paquetValide(p) {
   );
 }
 
-async function commiter(paquet, fichier, categorie, env) {
+async function commiter(paquet, fichier, club, categorie, env) {
   const branche = env.BRANCHE || "main";
   const url = `https://api.github.com/repos/${env.DEPOT}/contents/${fichier}`;
   const entetes = {
@@ -121,7 +129,7 @@ async function commiter(paquet, fichier, categorie, env) {
     method: "PUT",
     headers: { ...entetes, "Content-Type": "application/json" },
     body: JSON.stringify({
-      message: `chore: publier l'effectif ${categorie.toUpperCase()} du ${paquet.genere} depuis l'application`,
+      message: `chore: publier l'effectif ${categorie.toUpperCase()} de ${club} du ${paquet.genere} depuis l'application`,
       content: btoa(contenu),
       branch: branche,
       ...(sha ? { sha } : {}),

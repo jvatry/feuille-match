@@ -2,12 +2,13 @@
 /**
  * chiffrer-effectif.mjs — prépare le fichier d'effectif chiffré servi à côté de l'application.
  *
- *   node chiffrer-effectif.mjs --categorie u11 effectif-u11.csv
+ *   node chiffrer-effectif.mjs --club fchettange --categorie u11 effectif-u11.csv
  *
- * Un effectif par catégorie (u7 : U6, U7 ; u9 : U8, U9 ; u11 : U10, U11 ;
- * chacun avec ses adultes), chiffré avec le code de sa catégorie. Sans
- * --categorie : u9. Le fichier écrit est effectif-<categorie>.enc.json, sauf
- * si un second nom est donné.
+ * Un effectif par club et par catégorie (u7 : U6, U7 ; u9 : U8, U9 ; u11 :
+ * U10, U11 ; chacun avec ses adultes), chiffré avec le code de cette catégorie
+ * du club. Le club est obligatoire (le nom de son dossier) ; sans --categorie :
+ * u9. Le fichier écrit est <club>/effectif-<categorie>.enc.json, sauf si un
+ * second nom est donné.
  *
  * La phrase de passe est demandée à la saisie (masquée), ou lue dans la variable
  * d'environnement FM_PHRASE pour un usage automatisé.
@@ -15,22 +16,22 @@
  * Entrée  : le CSV exporté par l'onglet Effectif de l'application (bouton
  *           Exporter). Le texte est chiffré tel quel : c'est l'application
  *           elle-même qui le relit ensuite, avec son propre lecteur de CSV.
- * Sortie  : effectif-<categorie>.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
+ * Sortie  : <club>/effectif-<categorie>.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
  *           Ce fichier seul est commité. Le CSV en clair ne l'est jamais.
  *
  * L'application publie elle-même l'effectif (bouton « Publier » de l'onglet
  * Effectif), via le relais décrit dans relais/README.md. Ce script reste la
  * solution de secours, et prépare la configuration du relais :
  *
- *   node chiffrer-effectif.mjs --jeton --categorie u11
+ *   node chiffrer-effectif.mjs --jeton --club fchettange --categorie u11
  *
- * affiche l'empreinte du code à donner au relais (EMPREINTE_JETON_U11). Le
- * relais n'apprend jamais le code lui-même.
+ * affiche l'empreinte du code à donner au relais
+ * (EMPREINTE_JETON_FCHETTANGE_U11). Le relais n'apprend jamais le code lui-même.
  *
  * Node 18 ou plus. Aucune dépendance.
  */
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, stat } from "node:fs/promises";
 import { webcrypto as crypto } from "node:crypto";
 import { createInterface } from "node:readline";
 
@@ -214,14 +215,20 @@ async function lirePhrase() {
 }
 
 const CATEGORIES = ["u7", "u9", "u11"];
+const CLUB = /^[a-z][a-z0-9]{1,29}$/;   // même règle que l'application et le relais
 
-/* --jeton et --categorie <u7|u9|u11>, puis les fichiers. */
+/* --jeton, --club <dossier> et --categorie <u7|u9|u11>, puis les fichiers. */
 function lireArguments(args) {
-  const options = { jeton: false, categorie: "u9", fichiers: [] };
+  const options = { jeton: false, club: "", categorie: "u9", fichiers: [] };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--jeton") options.jeton = true;
+    else if (args[i] === "--club") options.club = String(args[++i] || "").toLowerCase();
     else if (args[i] === "--categorie") options.categorie = String(args[++i] || "").toLowerCase();
     else options.fichiers.push(args[i]);
+  }
+  if (!CLUB.test(options.club)) {
+    console.error(`Club manquant ou invalide : « ${options.club} ». Donner le nom du dossier du club, par ex. --club fchettange.`);
+    process.exit(1);
   }
   if (!CATEGORIES.includes(options.categorie)) {
     console.error(`Catégorie inconnue : « ${options.categorie} ». Choisir u7, u9 ou u11.`);
@@ -231,18 +238,22 @@ function lireArguments(args) {
 }
 
 async function principal() {
-  const { jeton, categorie, fichiers } = lireArguments(process.argv.slice(2));
+  const { jeton, club, categorie, fichiers } = lireArguments(process.argv.slice(2));
   if (jeton) {
     const empreinte = await empreinteJeton(await lirePhrase());
-    console.log(`\nEMPREINTE_JETON_${categorie.toUpperCase()} = ${empreinte}`);
+    console.log(`\nEMPREINTE_JETON_${club.toUpperCase()}_${categorie.toUpperCase()} = ${empreinte}`);
     console.log("À enregistrer comme secret du relais (voir relais/README.md).");
     return;
   }
 
-  const [entree, sortie = `effectif-${categorie}.enc.json`] = fichiers;
+  const [entree, sortie = `${club}/effectif-${categorie}.enc.json`] = fichiers;
 
   if (!entree) {
-    console.error("Usage : node chiffrer-effectif.mjs [--categorie u7|u9|u11] <effectif.csv> [effectif-u9.enc.json]");
+    console.error("Usage : node chiffrer-effectif.mjs --club <dossier> [--categorie u7|u9|u11] <effectif.csv> [sortie.enc.json]");
+    process.exit(1);
+  }
+  if (!fichiers[1] && !(await stat(club).then((s) => s.isDirectory(), () => false))) {
+    console.error(`Dossier du club introuvable : « ${club} ». Lancer le script à la racine du dépôt. Rien n'a été écrit.`);
     process.exit(1);
   }
 
@@ -267,7 +278,7 @@ async function principal() {
   const paquet = await chiffrer(texte, phrase);
   await writeFile(sortie, JSON.stringify(paquet, null, 2) + "\n", "utf8");
 
-  console.log(`\n${sortie} écrit (effectif ${categorie.toUpperCase()}) — ${lignes.length} lignes, empreinte ${paquet.empreinte}.`);
+  console.log(`\n${sortie} écrit (effectif ${categorie.toUpperCase()} de ${club}) — ${lignes.length} lignes, empreinte ${paquet.empreinte}.`);
   console.log("Commite ce fichier. Garde le CSV en clair hors du dépôt.");
 }
 
