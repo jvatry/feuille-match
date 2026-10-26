@@ -2284,7 +2284,7 @@ function EspaceCategorie({ espace, changerEspace }) {
           <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
         )}
         {onglet === "feuille" && document_ === "convocation" && (
-          <VueConvocation feuilles={feuilles} personneDe={personneDe} tenue={tenue} setTenue={setTenue} />
+          <VueConvocation feuilles={feuilles} personneDe={personneDe} effectif={effectif} tenue={tenue} setTenue={setTenue} />
         )}
         {onglet === "effectif" && (
           <VueEffectif
@@ -3688,30 +3688,58 @@ const heureRdv = (hhmm) => {
   return `${Number(h)} H ${m}`;
 };
 
+/* Le prénom tel qu'il se prononce, pour rapprocher les orthographes d'un
+   même prénom : Rafael / Raphaël, Mathéo / Matteo, Maël / Mael, Jade / Jayde. */
+function sonPrenom(prenom) {
+  return sansAccent(prenom)
+    .replace(/[^a-z]/g, "")
+    .replace(/ph/g, "f")
+    .replace(/(^|[^cs])h/g, "$1")      // h muet, sauf ch et sh
+    .replace(/y/g, "i")
+    .replace(/ck|k|qu/g, "c")
+    .replace(/(.)\1+/g, "$1");        // lettres doublées
+}
+
+/* Les lettres d'un nom, sans accent ni espace ni tiret, en majuscules. */
+const lettresNom = (nom) => sansAccent(nom).replace(/[^a-z]/g, "").toUpperCase();
+
+/* Comment appeler une personne sur la convocation : son prénom seul, ou,
+   si un autre de `groupe` (l'effectif) a le même prénom à l'oreille, son
+   prénom et le début de son nom, assez pour les distinguer : « JULES D. »,
+   « JULES DU. » et « JULES DE. ». */
+function appellation(p, groupe) {
+  const prenom = (p.prenom || p.nom).toUpperCase();
+  const son = sonPrenom(p.prenom || p.nom);
+  const homonymes = groupe.filter((q) => q.id !== p.id && sonPrenom(q.prenom || q.nom) === son);
+  const nom = lettresNom(p.nom);
+  if (!homonymes.length || !p.prenom || !nom) return { prenom, homonyme: false };
+  const autres = homonymes.map((q) => lettresNom(q.nom));
+  let n = 1;
+  while (n < nom.length && autres.some((a) => a.slice(0, n) === nom.slice(0, n))) n += 1;
+  return { prenom: `${prenom} ${nom.slice(0, n)}.`, homonyme: true };
+}
+
 /* Ce que montre l'image, sans rien dessiner. Une convocation ne réunit que
-   des plateaux d'un même type (U9 ensemble, U11 à part). Deux convoqués au
-   même prénom, dans cette convocation, se distinguent par l'initiale du nom
-   et la catégorie : « JULES D. (U9) ». */
-function modeleConvocation(feuilles, personneDe, tenue) {
+   des plateaux d'un même type (U9 ensemble, U11 à part). Un convoqué dont le
+   prénom est porté par un autre joueur de l'effectif, convoqué ou non, est
+   distingué par le début de son nom et sa catégorie : « JULES D. (U9) » ;
+   de même pour les adultes de l'encadrement, entre adultes. */
+function modeleConvocation(feuilles, personneDe, tenue, effectif = []) {
   const u11 = feuilles[0] && reglesDe(feuilles[0].plateau).encadrement !== "delegue";
-  const prenomDe = (id) => {
-    const p = id ? personneDe(id) : null;
-    return p ? (p.prenom || p.nom).toUpperCase() : "";
-  };
   const convoques = feuilles.flatMap((f) =>
     f.equipes.flatMap((e) => e.joueurs.map(personneDe).filter(Boolean)));
-  const parPrenom = {};
-  convoques.forEach((j) => {
-    const k = sansAccent(j.prenom || j.nom);
-    parPrenom[k] = (parPrenom[k] || 0) + 1;
-  });
+  const parId = new Map([...effectif, ...convoques].map((p) => [p.id, p]));
+  const joueurs = [...parId.values()].filter((p) => !estDelegue(p));
+  const adultes = [...parId.values()].filter(estDelegue);
+  const prenomDe = (id) => {
+    const p = id ? personneDe(id) : null;
+    return p ? appellation(p, adultes).prenom : "";
+  };
   /* { nom: « JULES D. », categorie: « (U9) » }, la catégorie étant écrite
      plus petit à la suite du nom. */
   const appel = (j) => {
-    const prenom = (j.prenom || j.nom).toUpperCase();
-    return parPrenom[sansAccent(j.prenom || j.nom)] > 1
-      ? { nom: `${prenom} ${j.nom.charAt(0).toUpperCase()}.`, categorie: `(${j.categorie})` }
-      : { nom: prenom, categorie: "" };
+    const { prenom, homonyme } = appellation(j, joueurs);
+    return { nom: prenom, categorie: homonyme ? `(${j.categorie})` : "" };
   };
 
   const plateaux = feuilles.map(({ plateau, equipes }) => ({
@@ -3948,7 +3976,7 @@ function dessinerConvocation(toile, m, logo = null) {
   });
 }
 
-function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
+function VueConvocation({ feuilles, personneDe, effectif, tenue, setTenue }) {
   const [image, setImage] = useState(null);
   const [message, setMessage] = useState(null);
   const [logo, setLogo] = useState(null);
@@ -3962,9 +3990,9 @@ function VueConvocation({ feuilles, personneDe, tenue, setTenue }) {
   }, []);
 
   const modele = useMemo(
-    () => modeleConvocation(feuilles, personneDe, tenue),
+    () => modeleConvocation(feuilles, personneDe, tenue, effectif),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feuilles, personneDe, tenue]
+    [feuilles, personneDe, tenue, effectif]
   );
 
   /* L'image est prête avant le toucher sur « Partager » : le téléphone
