@@ -19,9 +19,10 @@
  *   Un club ou une catégorie sans secret ne peut rien publier.
  *
  * Surclassement : le paquet peut porter, en plus, la clé de surclassement de
- * l'espace (cleSurclasses : u9, u11) et la liste chiffrée de ses joueurs
- * surclassables pour l'espace du dessus (surclasses : u7, u9). Leur forme est
- * vérifiée comme le reste.
+ * l'espace (cleSurclasses : u7, u9, u11), la liste chiffrée de ses joueurs
+ * surclassables pour l'espace du dessus (surclasses : u7, u9) et, chiffrés
+ * pour l'espace du dessous, ceux qu'il a pris (pris : u9, u11). Leur forme est
+ * vérifiée comme le reste ; le relais ne peut pas les lire.
  */
 
 const TAILLE_MAX = 200_000;
@@ -30,7 +31,7 @@ const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const B64URL_32 = /^[A-Za-z0-9_-]{43}$/;   // une coordonnée P-256 en JWK
 
 /* Champs facultatifs du paquet, et les catégories qui peuvent les porter. */
-const FACULTATIFS = { cleSurclasses: ["u9", "u11"], surclasses: ["u7", "u9"] };
+const FACULTATIFS = { cleSurclasses: ["u7", "u9", "u11"], surclasses: ["u7", "u9"], pris: ["u9", "u11"] };
 
 /* Les seuls fichiers que le relais accepte d'écrire : <club>/effectif-<categorie>.enc.json. */
 const CATEGORIES = ["u7", "u9", "u11"];
@@ -120,8 +121,9 @@ function facultatifsValides(p, categorie) {
     const c = p.cleSurclasses;
     if (!objet(c, "iv,privee,publique") || !publiqueValide(c.publique) || !b64(c.iv) || !b64(c.privee)) return false;
   }
-  if (Object.hasOwn(p, "surclasses")) {
-    const s = p.surclasses;
+  for (const champ of ["surclasses", "pris"]) {
+    if (!Object.hasOwn(p, champ)) continue;
+    const s = p[champ];
     if (!objet(s, "donnees,epk,iv") || !publiqueValide(s.epk) || !b64(s.iv) || !b64(s.donnees)) return false;
   }
   return true;

@@ -22,9 +22,10 @@ Pages le met en ligne en une à deux minutes :
   club ne permet pas d'écrire l'effectif d'un autre.
 
 Pour le surclassement, le fichier d'effectif peut aussi porter la clé de
-surclassement de l'espace (`cleSurclasses`, en U9 et U11) et la liste chiffrée
+surclassement de l'espace (`cleSurclasses`, en U7, U9 et U11), la liste chiffrée
 de ses joueurs surclassables pour l'espace du dessus (`surclasses`, en U7 et
-U9). Le relais n'accepte ces champs que pour ces catégories et en vérifie la
+U9) et ceux qu'il a pris, chiffrés pour l'espace du dessous (`pris`, en U9 et
+U11). Le relais n'accepte ces champs que pour ces catégories et en vérifie la
 forme ; il ne peut pas les lire. Aucun secret de plus.
 
 `chiffrer-effectif.mjs` reste la solution de secours.

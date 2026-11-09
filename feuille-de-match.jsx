@@ -156,6 +156,18 @@ const CLE_PUBLIE = "feuilles:publie";
 const CLE_NOUVEAUTES = "feuilles:nouveautes";
 const CLE_CLE_SURCLASSES = "feuilles:cle-surclasses";   // clé privée de l'espace du dessus
 const CLE_SURCLASSES = "feuilles:surclasses";           // les surclassables reçus
+const CLE_PRIS = "feuilles:pris";                       // ses surclassables pris par l'espace du dessus
+const CLE_ENGAGEMENTS = "feuilles:engagements-publies"; // ce que l'autre espace sait déjà
+/* Après un changement d'équipe touchant un surclassable, l'autre espace est
+   prévenu une fois la composition posée. */
+const DELAI_ENGAGEMENTS = 8000;
+
+/* « 2026-12-12 » d'aujourd'hui, pour ignorer les plateaux passés. */
+const aujourdhui = () => new Date().toISOString().slice(0, 10);
+
+/* Engagements : clePersonne → dates de plateau ; signature stable. */
+const signatureEngagements = (e) =>
+  JSON.stringify(Object.keys(e).sort().map((k) => [k, [...e[k]].sort()]));
 
 /* Effectif chiffré publié dans le dossier du club (celui de la page) : un
    fichier par espace, chacun ouvert par le code de sa catégorie du club. */
@@ -536,7 +548,7 @@ async function cleAES(phrase, sel, iterations, usage = "decrypt") {
 
 /* Le même paquet que chiffrer-effectif.mjs, fabriqué sur le téléphone : seul
    ce texte chiffré quitte l'appareil. */
-async function chiffrerPaquet(texte, phrase, { clePrivee = null, surclasses = null } = {}) {
+async function chiffrerPaquet(texte, phrase, { clePrivee = null, surclasses = null, pris = null } = {}) {
   if (typeof crypto === "undefined" || !crypto.subtle) throw new Error("CONTEXTE_NON_SUR");
   const sel = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -555,6 +567,7 @@ async function chiffrerPaquet(texte, phrase, { clePrivee = null, surclasses = nu
     extras.cleSurclasses = { publique: publiqueJWK(clePrivee), iv: versB64(ivCle), privee: versB64(new Uint8Array(privee)) };
   }
   if (surclasses) extras.surclasses = surclasses;
+  if (pris) extras.pris = pris;
   return {
     ...extras,
     v: 1,
@@ -1942,6 +1955,9 @@ function EspaceCategorie({ espace, changerEspace }) {
   const [surclasses, setSurclasses] = useState([]);
   const clePrivee = useRef(null);
   const automatique = useRef(false);
+  /* Ceux de ses surclassables que l'espace du dessus a pris : clePersonne →
+     dates de plateau. */
+  const [prisRecus, setPrisRecus] = useState({});
   /* Les plateaux préparés pour le samedi ; les onglets Plateau, Équipes et
      Feuille travaillent sur le plateau actif. */
   const [feuilles, setFeuilles] = useState(() =>
@@ -2056,27 +2072,31 @@ function EspaceCategorie({ espace, changerEspace }) {
     try { stockage.ecrire(CLE_CLE_SURCLASSES, JSON.stringify(cle)); } catch (e) { /* best effort */ }
   };
 
-  /* Les surclassables proposés par le coach du dessous, lus dans son fichier
-     d'effectif. Sans réseau ou sans clé, la dernière liste reçue reste. */
+  /* Ce que l'autre espace a publié pour celui-ci. Espace du dessus : les
+     surclassables proposés, et où le coach du dessous les a déjà mis.
+     Espace du dessous : ceux de ses joueurs que le dessus a pris. Sans réseau
+     ou sans clé, la dernière version reçue reste. */
   const actualiserSurclasses = async () => {
-    if (!surclassement) return;
-    let paquet;
-    try {
-      paquet = await telechargerEffectif(surclassement.depuis);
-    } catch (e) {
-      return;
+    if (surclassement) {
+      try {
+        const paquet = await telechargerEffectif(surclassement.depuis);
+        if (!paquet.surclasses) setSurclasses([]);
+        else if (clePrivee.current) {
+          const { joueurs, pris = {} } = JSON.parse(await dechiffrerSurclasses(paquet.surclasses, clePrivee.current));
+          const { personnes } = depuisCSV(joueurs);
+          setSurclasses(personnes
+            .filter((p) => p.categorie === surclassement.categorie)
+            .map((p) => ({ ...p, id: `s:${p.id}`, surclasse: true, prisLe: pris[clePersonne(p)] || [] })));
+        }
+      } catch (e) { /* hors ligne, ou chiffré pour une autre clé : le coach du dessous republiera */ }
     }
-    if (!paquet.surclasses) {
-      setSurclasses([]);
-      return;
+    if (cible) {
+      try {
+        const paquet = await telechargerEffectif(cible);
+        if (!paquet.pris) setPrisRecus({});
+        else if (clePrivee.current) setPrisRecus(JSON.parse(await dechiffrerSurclasses(paquet.pris, clePrivee.current)));
+      } catch (e) { /* idem */ }
     }
-    if (!clePrivee.current) return;
-    try {
-      const { personnes } = depuisCSV(await dechiffrerSurclasses(paquet.surclasses, clePrivee.current));
-      setSurclasses(personnes
-        .filter((p) => p.categorie === surclassement.categorie)
-        .map((p) => ({ ...p, id: `s:${p.id}`, surclasse: true })));
-    } catch (e) { /* liste chiffrée pour une autre clé : le coach du dessous republiera */ }
   };
 
   /* Le surclassement demande deux publications : l'espace du dessus publie sa
@@ -2086,41 +2106,51 @@ function EspaceCategorie({ espace, changerEspace }) {
      cours de ce téléphone), avec ce qui manque. Une fois par ouverture au
      plus ; jamais juste après une publication, le site servant encore
      l'ancien fichier quelques minutes. */
+  /* Même chose quand un coach met un surclassable dans une équipe, ou l'en
+     retire : l'autre espace en est prévenu (engagements), pour qu'un enfant
+     ne figure pas sur deux feuilles de match le même samedi. */
   const transmettreSurclassement = async () => {
     if ((!surclassement && !cible) || automatique.current) return;
     const liste = courant.current.publie;
     if (!liste?.length) return;
+    let engagementsChanges = false;
+    let remplacee = "";
     try {
-      if (await stockage.lire(CLE_REMPLACEE)) return;
       if (!(await stockage.lire(CLE_CODE))) return;
+      remplacee = await stockage.lire(CLE_REMPLACEE);
+      engagementsChanges = ((await stockage.lire(CLE_ENGAGEMENTS)) || signatureEngagements({}) + "|" + signatureEngagements({}))
+        !== courant.current.signature;
     } catch (e) {
       return;
     }
-    let utile = false;
-    try {
-      const moi = await telechargerEffectif(espace);
-      if (surclassement && !moi.cleSurclasses) utile = true;
-      if (!utile && cible) {
-        const categorie = TYPES_PLATEAU[cible].surclassement.categorie;
-        utile = liste.some((p) => p.surclassable && p.categorie === categorie) && !moi.surclasses
-          && Boolean((await telechargerEffectif(cible)).cleSurclasses);
+    let utile = engagementsChanges;
+    /* Le reste se lit dans le fichier en ligne, périmé juste après une publication. */
+    if (!utile && !remplacee) {
+      try {
+        const moi = await telechargerEffectif(espace);
+        if (!moi.cleSurclasses) utile = true;
+        if (!utile && cible) {
+          const categorie = TYPES_PLATEAU[cible].surclassement.categorie;
+          utile = liste.some((p) => p.surclassable && p.categorie === categorie) && !moi.surclasses
+            && Boolean((await telechargerEffectif(cible)).cleSurclasses);
+        }
+      } catch (e) {
+        return;   // sans réseau : à la prochaine ouverture
       }
-    } catch (e) {
-      return;   // sans réseau : à la prochaine ouverture
     }
     if (!utile) return;
     automatique.current = true;
     try {
       await publier(null, liste, true);
       suivi("surclassement/automatique");
-    } catch (e) {
+    } catch (e) { /* réessayé à la prochaine vérification */ } finally {
       automatique.current = false;
     }
   };
 
   /* Les vérifications en cours de navigation lisent l'état du moment. */
   const courant = useRef({});
-  courant.current = { effectif, publie };
+  courant.current = { effectif, publie, engagements: { haut: {}, bas: {} }, signature: "" };
   const verification = useRef(false);
 
   const verifier = async () => {
@@ -2163,12 +2193,14 @@ function EspaceCategorie({ espace, changerEspace }) {
         const v = await stockage.lire(CLE_TENUE);
         if (v) setTenue(JSON.parse(v));
       } catch (e) { /* tenue par défaut */ }
-      if (surclassement) {
+      if (surclassement || cible) {
         try {
           const v = await stockage.lire(CLE_CLE_SURCLASSES);
           if (v) clePrivee.current = JSON.parse(v);
           const s = await stockage.lire(CLE_SURCLASSES);
-          if (s) setSurclasses(JSON.parse(s) || []);
+          if (s && surclassement) setSurclasses(JSON.parse(s) || []);
+          const p = await stockage.lire(CLE_PRIS);
+          if (p && cible) setPrisRecus(JSON.parse(p) || {});
         } catch (e) { /* rien reçu pour l'instant */ }
       }
       try {
@@ -2279,6 +2311,7 @@ function EspaceCategorie({ espace, changerEspace }) {
   useEffect(() => { if (pret) enregistre(CLE_NOUVEAUTES, nouveautes); }, [nouveautes, pret]);
   useEffect(() => { if (pret) enregistre(CLE_TENUE, tenue); }, [tenue, pret]);
   useEffect(() => { if (pret && surclassement) enregistre(CLE_SURCLASSES, surclasses); }, [surclasses, pret]);
+  useEffect(() => { if (pret && cible) enregistre(CLE_PRIS, prisRecus); }, [prisRecus, pret]);
 
   /* Une personne retirée de l'effectif (à la main ou par une mise à jour)
      ne reste pas dans une équipe. */
@@ -2328,10 +2361,11 @@ function EspaceCategorie({ espace, changerEspace }) {
       try { remplacee = (await stockage.lire(CLE_EMPREINTE)) || ""; } catch (e2) { /* best effort */ }
     }
 
-    /* Espace du dessus : sa clé de surclassement, reprise de la version en
-       ligne si ce téléphone ne l'a pas encore, créée la toute première fois. */
+    /* Sa clé de surclassement (pour recevoir de l'autre espace), reprise de
+       la version en ligne si ce téléphone ne l'a pas encore, créée la toute
+       première fois. */
     let cle = null;
-    if (surclassement) {
+    if (surclassement || cible) {
       cle = clePrivee.current;
       if (!cle && enLigne?.cleSurclasses) {
         try { cle = (await ouvrirPaquet(enLigne, code)).clePrivee; } catch (e) { /* autre code */ }
@@ -2339,23 +2373,44 @@ function EspaceCategorie({ espace, changerEspace }) {
       if (!cle) cle = await nouvelleCleSurclasses();
     }
 
-    /* Espace du dessous : ses surclassables, chiffrés pour l'espace du dessus.
-       Sans réseau vers celui-ci, la liste déjà publiée est gardée telle quelle. */
+    /* Pour l'autre espace, chiffré avec sa clé publique : le dessous envoie
+       ses surclassables et où il les a mis ; le dessus envoie ceux qu'il a
+       pris. Sans réseau ou sans clé en face, ce qui est déjà publié reste, et
+       l'envoi est refait plus tard (`complet`). */
+    const { engagements, signature } = courant.current;
+    let complet = true;
     let envoi = null;
     if (cible) {
       const categorie = TYPES_PLATEAU[cible].surclassement.categorie;
       const choisis = liste.filter((p) => p.surclassable && p.categorie === categorie);
       try {
         const publique = (await telechargerEffectif(cible)).cleSurclasses?.publique;
-        if (publique) envoi = await chiffrerSurclasses(versCSV(choisis), publique);
+        if (publique) {
+          envoi = await chiffrerSurclasses(JSON.stringify({ joueurs: versCSV(choisis), pris: engagements.bas }), publique);
+        } else if (choisis.length) complet = false;
       } catch (e) {
         envoi = enLigne?.surclasses || null;
+        complet = false;
+      }
+    }
+    let pris = null;
+    if (surclassement) {
+      try {
+        const publique = (await telechargerEffectif(surclassement.depuis)).cleSurclasses?.publique;
+        if (publique) pris = await chiffrerSurclasses(JSON.stringify(engagements.haut), publique);
+        else if (Object.keys(engagements.haut).length) complet = false;
+      } catch (e) {
+        pris = enLigne?.pris || null;
+        complet = false;
       }
     }
 
-    const paquet = await chiffrerPaquet(versCSV(liste), code, { clePrivee: cle, surclasses: envoi });
+    const paquet = await chiffrerPaquet(versCSV(liste), code, { clePrivee: cle, surclasses: envoi, pris });
     await envoyerPaquet(paquet, await jetonPublication(code), espace);
     if (cle) retenirCle(cle);
+    if (complet && (surclassement || cible)) {
+      try { stockage.ecrire(CLE_ENGAGEMENTS, signature); } catch (e) { /* best effort */ }
+    }
     try {
       stockage.ecrire(CLE_CODE, code);
       stockage.ecrire(CLE_EMPREINTE, paquet.empreinte);
@@ -2375,6 +2430,45 @@ function EspaceCategorie({ espace, changerEspace }) {
 
   /* L'effectif et les surclassables reçus : les personnes d'une convocation. */
   const personnes = useMemo(() => [...effectif, ...surclasses], [effectif, surclasses]);
+
+  /* Où sont les surclassables dans les équipes de cet espace, par date de
+     plateau : `haut`, ceux reçus du dessous ; `bas`, ses propres joueurs
+     proposés au dessus. Ce que l'autre espace doit savoir. */
+  const engagements = useMemo(() => {
+    const haut = {};
+    const bas = {};
+    const categorieBas = cible ? TYPES_PLATEAU[cible].surclassement.categorie : null;
+    const noter = (m, p, date) => { const k = clePersonne(p); m[k] = [...(m[k] || []), date]; };
+    feuilles.forEach((f) => f.equipes.forEach((e) => e.joueurs.forEach((id) => {
+      const p = personneDe(id);
+      if (!p) return;
+      if (p.surclasse) noter(haut, p, f.plateau.date || "");
+      else if (categorieBas && p.surclassable && p.categorie === categorieBas) noter(bas, p, f.plateau.date || "");
+    })));
+    return { haut, bas };
+  }, [feuilles, personneDe, cible]);
+  const signature = `${signatureEngagements(engagements.haut)}|${signatureEngagements(engagements.bas)}`;
+  courant.current.engagements = engagements;
+  courant.current.signature = signature;
+
+  /* L'autre espace est prévenu peu après un changement. */
+  useEffect(() => {
+    if (!pret || (!surclassement && !cible)) return undefined;
+    const minuterie = setTimeout(() => { transmettreSurclassement(); }, DELAI_ENGAGEMENTS);
+    return () => clearTimeout(minuterie);
+  }, [signature, pret]);
+
+  /* Le même enfant sur deux feuilles le même samedi : déjà pris par l'autre
+     espace pour cette date (ou une date non renseignée), plateaux passés
+     exceptés. */
+  const conflit = (p, date) => {
+    if (!p) return null;
+    const dates = p.surclasse ? p.prisLe : (cible ? prisRecus[clePersonne(p)] : null);
+    const autre = p.surclasse ? surclassement?.depuis : cible;
+    const jour = aujourdhui();
+    const d = (dates || []).find((x) => (!x || x >= jour) && (!x || !date || x === date));
+    return d === undefined ? null : { espace: autre, date: d };
+  };
 
   /* Un enfant ne joue que dans une équipe par samedi, tous plateaux
      confondus : où joue chacun, et où chaque délégué est déjà désigné. */
@@ -2630,6 +2724,7 @@ function EspaceCategorie({ espace, changerEspace }) {
             allerEffectif={() => setOnglet("effectif")}
             surclassement={surclassement}
             surclasses={surclasses}
+            conflit={conflit}
           />
         )}
         {onglet === "feuille" && (
@@ -2648,7 +2743,7 @@ function EspaceCategorie({ espace, changerEspace }) {
           </div>
         )}
         {onglet === "feuille" && document_ === "feuille" && (
-          <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} />
+          <VueFeuille key={courante.id} plateau={plateau} equipes={equipes} personneDe={personneDe} conflit={conflit} />
         )}
         {onglet === "feuille" && document_ === "convocation" && (
           <VueConvocation feuilles={feuilles} personneDe={personneDe} effectif={personnes} tenue={tenue} setTenue={setTenue} />
@@ -3297,9 +3392,10 @@ const GROUPE_SURCLASSES = "surclassement";
 function VueEquipes({
   effectif, plateau, equipes, equipeActive, setEquipeActive, affectation, delegations, feuilleId,
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
-  surclassement = null, surclasses = [],
+  surclassement = null, surclasses = [], conflit = () => null,
 }) {
   const regles = reglesDe(plateau);
+  const prisAilleurs = (c) => `Pris en ${c.espace}${c.date ? ` le ${jourMois(c.date)}` : ""}`;
   const categoriesJoueurs = regles.categoriesJoueurs;
   /* Les surclassables forment un groupe à part, masqué au départ. */
   const groupes = useMemo(
@@ -3454,6 +3550,11 @@ function VueEquipes({
                         <span className="text-xs ml-1.5" style={{ color: C.ink70 }}>{j.categorie}</span>
                       </span>
                       {j.surclasse && <BadgeSurclasse />}
+                      {conflit(j, plateau.date) && (
+                        <span className="text-xs shrink-0 font-semibold" style={{ color: C.alerte }}>
+                          {prisAilleurs(conflit(j, plateau.date)).replace("Pris", "Aussi pris")}
+                        </span>
+                      )}
                       {j.feminine && <BadgeFeminine />}
                       {regles.capitaine && (
                         <button onClick={() => majEquipe(active.id, {
@@ -3499,14 +3600,15 @@ function VueEquipes({
               )}
               {s.surclasse && s.joueurs.length > 0 && (
                 <p className="text-xs mb-2" style={{ color: C.ink70 }}>
-                  Proposés par le coach {surclassement.depuis}. Prévenez-le des joueurs que vous prenez.
+                  Proposés par le coach {surclassement.depuis}. Ceux que vous prenez lui sont signalés automatiquement.
                 </p>
               )}
               <ul className="space-y-1.5">
                 {s.joueurs.map((j) => {
                   const dans = affectation[j.id];
                   const ici = dans?.equipe.id === active.id;
-                  const bloque = dans && !ici;
+                  const ailleurs = !ici ? conflit(j, plateau.date) : null;
+                  const bloque = (dans && !ici) || Boolean(ailleurs);
                   const complet = !ici && (active.joueurs.length >= regles.maxJoueurs
                     || (s.surclasse && nbSurclasses >= surclassement.max));
                   return (
@@ -3539,7 +3641,7 @@ function VueEquipes({
                         {!j.valide && <BadgeLicence />}
                         {bloque && (
                           <span className="text-xs shrink-0 text-right" style={{ color: C.ink70 }}>
-                            {nomPlace(dans, feuilleId)}
+                            {dans ? nomPlace(dans, feuilleId) : prisAilleurs(ailleurs)}
                           </span>
                         )}
                         {!bloque && s.surclasse && !ici && nbSurclasses >= surclassement.max && (
@@ -4572,7 +4674,7 @@ function VueConvocation({ feuilles, personneDe, effectif, tenue, setTenue }) {
 /*  Feuille de match — aperçu en iframe, impression depuis l'iframe    */
 /* ------------------------------------------------------------------ */
 /* Ce qui manque avant d'imprimer la feuille, selon les règles du type. */
-function problemesFeuille(plateau, equipes, personneDe) {
+function problemesFeuille(plateau, equipes, personneDe, conflit = () => null) {
   const r = reglesDe(plateau);
   const problemes = [];
   if (!plateau.lieu) problemes.push("Le lieu du plateau n'est pas renseigné.");
@@ -4595,12 +4697,14 @@ function problemesFeuille(plateau, equipes, personneDe) {
     e.joueurs.forEach((id) => {
       const j = personneDe(id);
       if (j && !j.valide) problemes.push(`${j.nom} ${j.prenom} : licence non validée.`);
+      const c = conflit(j, plateau.date);
+      if (c) problemes.push(`${j.nom} ${j.prenom} : aussi sur une feuille ${c.espace}${c.date ? ` le ${jourMois(c.date)}` : ""}.`);
     });
   });
   return problemes;
 }
 
-function VueFeuille({ plateau, equipes, personneDe }) {
+function VueFeuille({ plateau, equipes, personneDe, conflit }) {
   const cadre = useRef(null);
   const [hauteur, setHauteur] = useState(600);
   const [message, setMessage] = useState(null);
@@ -4645,7 +4749,7 @@ function VueFeuille({ plateau, equipes, personneDe }) {
     }
   };
 
-  const problemes = problemesFeuille(plateau, equipes, personneDe);
+  const problemes = problemesFeuille(plateau, equipes, personneDe, conflit);
 
   return (
     <section>
