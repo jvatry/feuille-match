@@ -1941,6 +1941,9 @@ function EspaceCategorie({ espace, changerEspace }) {
   const cible = cibleSurclassement(espace);
   const [surclasses, setSurclasses] = useState([]);
   const clePrivee = useRef(null);
+  /* Ce que le surclassement attend d'une publication de ce téléphone : la clé
+     de l'espace (jamais publiée), ou des surclassables pas encore transmis. */
+  const [transmission, setTransmission] = useState({ cleManquante: false, enAttente: 0 });
   /* Les plateaux préparés pour le samedi ; les onglets Plateau, Équipes et
      Feuille travaillent sur le plateau actif. */
   const [feuilles, setFeuilles] = useState(() =>
@@ -2076,6 +2079,31 @@ function EspaceCategorie({ espace, changerEspace }) {
     } catch (e) { /* liste chiffrée pour une autre clé : le coach du dessous republiera */ }
   };
 
+  /* Les deux étapes du surclassement passent par une publication : l'espace du
+     dessus publie sa clé une fois, puis l'espace du dessous publie sa liste
+     pour cette clé. Juste après une publication depuis ce téléphone, le site
+     sert encore l'ancien fichier : on attend. */
+  const verifierTransmission = async () => {
+    if (!surclassement && !cible) return;
+    try {
+      if (await stockage.lire(CLE_REMPLACEE)) return;
+    } catch (e) { /* stockage indisponible */ }
+    let cleManquante = false;
+    let enAttente = 0;
+    try {
+      const moi = await telechargerEffectif(espace);
+      if (surclassement) cleManquante = !moi.cleSurclasses;
+      if (cible) {
+        const categorie = TYPES_PLATEAU[cible].surclassement.categorie;
+        const n = courant.current.effectif.filter((p) => p.surclassable && p.categorie === categorie).length;
+        if (n && !moi.surclasses && (await telechargerEffectif(cible)).cleSurclasses) enAttente = n;
+      }
+    } catch (e) {
+      return;   // sans réseau : on verra plus tard
+    }
+    setTransmission({ cleManquante, enAttente });
+  };
+
   /* Les vérifications en cours de navigation lisent l'état du moment. */
   const courant = useRef({});
   courant.current = { effectif, publie };
@@ -2089,6 +2117,7 @@ function EspaceCategorie({ espace, changerEspace }) {
       /* Sans code enregistré il n'y a rien à vérifier : l'état affiché reste. */
       if (etat !== "local" && etat !== "code_requis") setEtatEffectif(etat);
       await actualiserSurclasses();
+      await verifierTransmission();
     } finally {
       verification.current = false;
     }
@@ -2170,6 +2199,7 @@ function EspaceCategorie({ espace, changerEspace }) {
       setEtatEffectif(etat);
       suivi(`ouverture/${etat}`);
       await actualiserSurclasses();
+      await verifierTransmission();
       if (liste.length === 0) setOnglet("plateau");
       setPret(true);
     })();
@@ -2196,7 +2226,7 @@ function EspaceCategorie({ espace, changerEspace }) {
     if (!personnes.length) throw new Error("FICHIER_VIDE");
     if (ouvert.clePrivee) retenirCle(ouvert.clePrivee);
     recevoir(personnes, paquet, publie, false);
-    actualiserSurclasses();
+    actualiserSurclasses().then(verifierTransmission);
     try { stockage.ecrire(CLE_CODE, code); } catch (e) { /* best effort */ }
     setEtatEffectif("a_jour");
     setCodeDemande(false);
@@ -2259,9 +2289,18 @@ function EspaceCategorie({ espace, changerEspace }) {
     () => (publie ? ecartEffectif(publie, effectif) : null),
     [publie, effectif]
   );
-  const modificationsEnAttente = publie
+  const modificationsEnAttente = (publie
     ? !ecartVide(aPublier)
-    : ["local", "colle"].includes(etatEffectif) && effectif.length > 0;
+    : ["local", "colle"].includes(etatEffectif) && effectif.length > 0)
+    || transmission.cleManquante || transmission.enAttente > 0;
+
+  /* Les lignes du surclassement dans le résumé de la publication. */
+  const aPublierEnPlus = [
+    ...(transmission.cleManquante && surclassement
+      ? [`Recevoir les joueurs surclassés proposés par le coach ${surclassement.depuis}`] : []),
+    ...(transmission.enAttente && cible
+      ? [`${transmission.enAttente} joueur${transmission.enAttente > 1 ? "s" : ""} surclassable${transmission.enAttente > 1 ? "s" : ""} à transmettre au coach ${cible}`] : []),
+  ];
 
   /* Chiffre l'effectif avec le code de l'effectif et le confie au relais.
      En cas d'échec rien ne change sur l'appareil. */
@@ -2321,6 +2360,7 @@ function EspaceCategorie({ espace, changerEspace }) {
     } catch (e) { /* best effort */ }
     setPublie(liste);
     setEtatEffectif("publication_en_cours");
+    setTransmission({ cleManquante: false, enAttente: 0 });
     suivi("effectif/publie");
     return { avertissement };
   };
@@ -2588,6 +2628,7 @@ function EspaceCategorie({ espace, changerEspace }) {
             allerEffectif={() => setOnglet("effectif")}
             surclassement={surclassement}
             surclasses={surclasses}
+            cleManquante={transmission.cleManquante}
           />
         )}
         {onglet === "feuille" && (
@@ -2620,6 +2661,7 @@ function EspaceCategorie({ espace, changerEspace }) {
             retirer={retirerDeLEffectif}
             modifier={modifierPersonne}
             aPublier={aPublier}
+            aPublierEnPlus={aPublierEnPlus}
             modificationsEnAttente={modificationsEnAttente}
             publier={publier}
             publicationOuverte={publicationOuverte}
@@ -2629,6 +2671,7 @@ function EspaceCategorie({ espace, changerEspace }) {
             oublierCode={oublierCode}
             surclassement={surclassement}
             surclasses={surclasses}
+            cleManquante={transmission.cleManquante}
             cible={cible}
           />
         )}
@@ -3255,7 +3298,7 @@ const GROUPE_SURCLASSES = "surclassement";
 function VueEquipes({
   effectif, plateau, equipes, equipeActive, setEquipeActive, affectation, delegations, feuilleId,
   basculer, majEquipe, ajouterEquipe, supprimerEquipe, personneDe, allerEffectif,
-  surclassement = null, surclasses = [],
+  surclassement = null, surclasses = [], cleManquante = false,
 }) {
   const regles = reglesDe(plateau);
   const categoriesJoueurs = regles.categoriesJoueurs;
@@ -3514,7 +3557,9 @@ function VueEquipes({
                 <p className="text-sm py-2" style={{ color: C.ink70 }}>
                   {s.surclasse
                     ? (filtre.q ? "Aucun joueur surclassable ne correspond."
-                      : `Le coach ${surclassement.depuis} n'a encore proposé aucun joueur surclassable.`)
+                      : cleManquante
+                        ? `Pour recevoir les joueurs proposés par le coach ${surclassement.depuis}, publiez une fois votre effectif (onglet Effectif), puis demandez-lui de republier le sien.`
+                        : `Le coach ${surclassement.depuis} n'a encore proposé aucun joueur surclassable.`)
                     : `Aucun ${s.titre} disponible.`}
                 </p>
               )}
@@ -3557,7 +3602,7 @@ function JaugeEquipe({ n, regles = TYPES_PLATEAU.U9 }) {
 function VueEffectif({
   espace = "U9", effectif, setEffectif, affectation, retirer, modifier, aPublier, modificationsEnAttente,
   publier, publicationOuverte, setPublicationOuverte, etat, demanderCode, oublierCode,
-  surclassement = null, surclasses = [], cible = null,
+  surclassement = null, surclasses = [], cible = null, cleManquante = false, aPublierEnPlus = [],
 }) {
   /* Les joueurs de cette catégorie que le coach peut proposer à l'espace du dessus. */
   const surclassable = cible ? { vers: cible, categorie: TYPES_PLATEAU[cible].surclassement.categorie } : null;
@@ -3728,6 +3773,7 @@ function VueEffectif({
       {(modificationsEnAttente || publicationOuverte) && (
         <Publication
           aPublier={aPublier}
+          enPlus={aPublierEnPlus}
           total={effectif.length}
           codeConnu={ETATS_AVEC_CODE.includes(etat) && etat !== "code_perime"}
           ouverte={publicationOuverte}
@@ -3832,7 +3878,9 @@ function VueEffectif({
 
       {surclassement && (
         <p className="text-xs mb-3" style={{ color: C.ink70 }}>
-          Surclassement : {surclasses.length
+          Surclassement : {cleManquante
+            ? `publiez une fois votre effectif pour pouvoir recevoir les joueurs ${surclassement.categorie} proposés par le coach ${surclassement.depuis}.`
+            : surclasses.length
             ? `${surclasses.length} joueur${surclasses.length > 1 ? "s" : ""} ${surclassement.categorie} proposé${surclasses.length > 1 ? "s" : ""} par le coach ${surclassement.depuis}, à choisir dans l'onglet Équipes.`
             : `aucun joueur ${surclassement.categorie} proposé par le coach ${surclassement.depuis} pour l'instant.`}
         </p>
@@ -3948,11 +3996,11 @@ const ERREURS_PUBLICATION = {
 
 /* « Publier » : le récapitulatif de ce qui va changer, puis une
    confirmation. Aucune notion de fichier ni de chiffrement ici. */
-function Publication({ aPublier, total, codeConnu, ouverte, ouvrir, fermer, publier, reussite }) {
+function Publication({ aPublier, enPlus = [], total, codeConnu, ouverte, ouvrir, fermer, publier, reussite }) {
   const [code, setCode] = useState("");
   const [enCours, setEnCours] = useState(false);
   const [erreur, setErreur] = useState(null);
-  const lignes = resumeEcart(aPublier);
+  const lignes = [...resumeEcart(aPublier), ...enPlus];
 
   const confirmer = async () => {
     if (enCours) return;
