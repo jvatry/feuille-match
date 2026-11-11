@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- Page d'un club : identique pour tous les clubs. Le club est le nom du
+       dossier ; son nom, ses couleurs et ses catégories sont dans club.json. -->
+  <title>Gestion des plateaux</title>
+  <meta name="theme-color" content="#14213D" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./icone.png" />
+  <link rel="apple-touch-icon" href="./icone.png" />
+
+  <!-- Tailwind (version CDN : pas de build, suffisant pour cet usage) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Babel transpile le .jsx directement dans le navigateur -->
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.3.1",
+        "react-dom": "https://esm.sh/react-dom@18.3.1",
+        "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1"
+      }
+    }
+  </script>
+
+  <style>
+    body { margin: 0; background: #F4F6FA; }
+    #chargement { padding: 2rem; font: 15px system-ui, sans-serif; color: #14213Db3; }
+  </style>
+</head>
+<body>
+  <div id="racine"><div id="chargement">Ouverture…</div></div>
+
+  <script type="text/babel" data-type="module" data-presets="react" src="../feuille-de-match.jsx"></script>
+  <script data-goatcounter="https://jvatry.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
