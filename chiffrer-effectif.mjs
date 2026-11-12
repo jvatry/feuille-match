@@ -18,6 +18,9 @@
  *           elle-même qui le relit ensuite, avec son propre lecteur de CSV.
  * Sortie  : <club>/effectif-<categorie>.enc.json — AES-256-GCM, clé dérivée par PBKDF2-SHA-256.
  *           Ce fichier seul est commité. Le CSV en clair ne l'est jamais.
+ *           Il ne porte pas les données de surclassement (clé de l'espace,
+ *           surclassables proposés) : elles reviennent à la prochaine
+ *           publication depuis l'application.
  *
  * L'application publie elle-même l'effectif (bouton « Publier » de l'onglet
  * Effectif), via le relais décrit dans relais/README.md. Ce script reste la

@@ -17,11 +17,21 @@
  *   EMPREINTE_JETON_<CLUB>_<CATEGORIE> (EMPREINTE_JETON_FCHETTANGE_U9…), donnés par
  *   node chiffrer-effectif.mjs --jeton --club fchettange --categorie u9.
  *   Un club ou une catégorie sans secret ne peut rien publier.
+ *
+ * Surclassement : le paquet peut porter, en plus, la clé de surclassement de
+ * l'espace (cleSurclasses : u7, u9, u11), la liste chiffrée de ses joueurs
+ * surclassables pour l'espace du dessus (surclasses : u7, u9) et, chiffrés
+ * pour l'espace du dessous, ceux qu'il a pris (pris : u9, u11). Leur forme est
+ * vérifiée comme le reste ; le relais ne peut pas les lire.
  */
 
 const TAILLE_MAX = 200_000;
 const CLES_PAQUET = ["algo", "donnees", "empreinte", "genere", "iv", "kdf", "v"];
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const B64URL_32 = /^[A-Za-z0-9_-]{43}$/;   // une coordonnée P-256 en JWK
+
+/* Champs facultatifs du paquet, et les catégories qui peuvent les porter. */
+const FACULTATIFS = { cleSurclasses: ["u7", "u9", "u11"], surclasses: ["u7", "u9"], pris: ["u9", "u11"] };
 
 /* Les seuls fichiers que le relais accepte d'écrire : <club>/effectif-<categorie>.enc.json. */
 const CATEGORIES = ["u7", "u9", "u11"];
@@ -69,7 +79,7 @@ export default {
     if (typeof club !== "string" || !CLUB.test(club)) return reponse(400, { erreur: "CLUB" });
     if (!CATEGORIES.includes(categorie)) return reponse(400, { erreur: "CATEGORIE" });
     if (!(await jetonValide(corps.jeton, empreinteDe(club, categorie, env)))) return reponse(403, { erreur: "CODE_REFUSE" });
-    if (!paquetValide(corps.paquet)) return reponse(400, { erreur: "PAQUET_INVALIDE" });
+    if (!paquetValide(corps.paquet, categorie)) return reponse(400, { erreur: "PAQUET_INVALIDE" });
 
     try {
       await commiter(corps.paquet, fichierDe(club, categorie), club, categorie, env);
@@ -94,9 +104,36 @@ async function jetonValide(jeton, attendu) {
 
 /* Exactement la forme produite par l'application et chiffrer-effectif.mjs :
    rien d'autre ne peut être glissé dans le fichier publié. */
-function paquetValide(p) {
+const objet = (o, cles) =>
+  Boolean(o) && typeof o === "object" && !Array.isArray(o) && Object.keys(o).sort().join() === cles;
+
+/* Une clé publique ECDH P-256, rien d'autre (pas de clé privée glissée). */
+const publiqueValide = (j) =>
+  objet(j, "crv,kty,x,y") && j.kty === "EC" && j.crv === "P-256" && B64URL_32.test(j.x) && B64URL_32.test(j.y);
+
+const b64 = (s) => typeof s === "string" && B64.test(s);
+
+function facultatifsValides(p, categorie) {
+  for (const champ of Object.keys(FACULTATIFS)) {
+    if (Object.hasOwn(p, champ) && !FACULTATIFS[champ].includes(categorie)) return false;
+  }
+  if (Object.hasOwn(p, "cleSurclasses")) {
+    const c = p.cleSurclasses;
+    if (!objet(c, "iv,privee,publique") || !publiqueValide(c.publique) || !b64(c.iv) || !b64(c.privee)) return false;
+  }
+  for (const champ of ["surclasses", "pris"]) {
+    if (!Object.hasOwn(p, champ)) continue;
+    const s = p[champ];
+    if (!objet(s, "donnees,epk,iv") || !publiqueValide(s.epk) || !b64(s.iv) || !b64(s.donnees)) return false;
+  }
+  return true;
+}
+
+function paquetValide(p, categorie) {
   if (!p || typeof p !== "object" || Array.isArray(p)) return false;
-  if (Object.keys(p).sort().join() !== CLES_PAQUET.join()) return false;
+  const base = Object.keys(p).filter((k) => !Object.hasOwn(FACULTATIFS, k)).sort().join();
+  if (base !== CLES_PAQUET.join()) return false;
+  if (!facultatifsValides(p, categorie)) return false;
   const k = p.kdf;
   return (
     p.v === 1 &&
