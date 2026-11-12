@@ -260,6 +260,11 @@ const TYPES_PLATEAU = {
 
 const reglesDe = (plateau) => TYPES_PLATEAU[plateau.type] || TYPES_PLATEAU.U9;
 
+/* Le numéro de licence d'un adulte de l'encadrement tel qu'imprimé sur la
+   feuille de match : seulement s'il est validé. Un adulte à la licence non
+   validée peut encadrer ; la case reste vide, à compléter à la main. */
+const licenceImprimee = (p) => (p && p.valide ? p.licence || "" : "");
+
 /* Surclassement : le coach de l'espace du dessous désigne ses joueurs
    surclassables (des U7 pour l'U9, des U9 pour l'U11) ; l'espace du dessus
    les reçoit, au plus `max` par équipe. Sans l'espace concerné dans le club,
@@ -969,7 +974,7 @@ function blocHTML(equipe, personneDe, m) {
         ${lignes}
         <tr class="fm-delegue">
           <td><b>Délégué :</b> ${d ? `${esc(d.nom)} ${esc(d.prenom)}` : ""}</td>
-          <td class="lic">${esc(d?.licence || "")}</td>
+          <td class="lic">${esc(licenceImprimee(d))}</td>
         </tr>
       </tbody>
     </table>`;
@@ -1052,7 +1057,7 @@ function feuilleU11HTML(plateau, equipes, personneDe) {
     const qui = (id) => (e && id ? personneDe(id) : null);
     const pied = (label, x, avecLicence) => `<tr class="pied"><td colspan="4">
       <span class="bi">${label}</span> ${x ? `${esc(x.nom)} ${esc(x.prenom)}` : ""}
-      ${avecLicence ? `<span style="float:right;width:47%"><span class="bi">N° lic.</span> ${esc(x?.licence || "")}</span>` : ""}
+      ${avecLicence ? `<span style="float:right;width:47%"><span class="bi">N° lic.</span> ${esc(licenceImprimee(x))}</span>` : ""}
       </td></tr>`;
     return `<div class="u11-bloc"><table>
       <colgroup><col style="width:6mm"><col style="width:45%"><col><col style="width:7mm"></colgroup>
@@ -1365,7 +1370,7 @@ function blocPDF(p, equipe, personneDe, bx, bt, m) {
   p.texte(bx + 5, hd, 10, "F2", "Délégué :");
   if (d) {
     p.texte(bx + 52, hd, 10, "F1", tronquer(`${d.nom} ${d.prenom}`, xSep - bx - 58, 10, "F1"));
-    p.centre(xSep + (cw * (1 - PART_NOM)) / 2, hd, 10, "F1", d.licence || "");
+    p.centre(xSep + (cw * (1 - PART_NOM)) / 2, hd, 10, "F1", licenceImprimee(d));
   }
 }
 
@@ -1655,8 +1660,8 @@ function blocU11PDF(p, n, equipe, personneDe, bx, bt) {
     if (personne) {
       const fin = licence ? xLicLab - 4 : xFin - 4;
       p.texte(xn, base, 9.5, "F1", tronquer(`${personne.nom} ${personne.prenom}`, fin - xn, 9.5, "F1"));
-      if (licence && personne.licence) {
-        p.texte(xLicLab + 4 + largeurTexte("N° lic.", 9, "F5"), base, 9.5, "F1", personne.licence);
+      if (licence && licenceImprimee(personne)) {
+        p.texte(xLicLab + 4 + largeurTexte("N° lic.", 9, "F5"), base, 9.5, "F1", licenceImprimee(personne));
       }
     }
   };
@@ -4691,6 +4696,12 @@ function problemesFeuille(plateau, equipes, personneDe, conflit = () => null) {
       if (!e.educateurId) problemes.push(`${e.nom} : éducateur non désigné.`);
     }
     if (r.capitaine && !e.capitaineId) problemes.push(`${e.nom} : capitaine non désigné.`);
+    /* Pour information : l'adulte encadre, mais son numéro n'est pas imprimé. */
+    (r.encadrement === "delegue" ? [["delegueId", "délégué"]]
+      : [["dirigeantId", "dirigeant"], ["educateurId", "éducateur"]]).forEach(([role, libelle]) => {
+      const a = e[role] ? personneDe(e[role]) : null;
+      if (a && !a.valide) problemes.push(`${a.nom} ${a.prenom} (${libelle}) : licence non validée, numéro non imprimé.`);
+    });
     const surclasses = e.joueurs.filter((id) => personneDe(id)?.surclasse).length;
     if (r.surclassement && surclasses > r.surclassement.max)
       problemes.push(`${e.nom} : ${surclasses} surclassés, ${r.surclassement.max} au plus.`);
@@ -4701,7 +4712,7 @@ function problemesFeuille(plateau, equipes, personneDe, conflit = () => null) {
       if (c) problemes.push(`${j.nom} ${j.prenom} : aussi sur une feuille ${c.espace}${c.date ? ` le ${jourMois(c.date)}` : ""}.`);
     });
   });
-  return problemes;
+  return [...new Set(problemes)];   // un même adulte dans deux équipes : une fois
 }
 
 function VueFeuille({ plateau, equipes, personneDe, conflit }) {
